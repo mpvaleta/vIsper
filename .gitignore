@@ -1,0 +1,17 @@
+# Bytecode gerado ao rodar o app ou os testes — nunca vai pro repo.
+__pycache__/
+*.py[cod]
+
+# Venv dedicado do vIsper (o README recomenda criar um dentro da pasta
+# do projeto, pras permissões do macOS ficarem amarradas sempre ao
+# MESMO interpreter — ver "Instalação" e o LaunchAgent).
+.venv/
+venv/
+
+# Logs do LaunchAgent (launchd/com.valeta.visper.plist escreve os dois
+# aqui na pasta do vIsper).
+visper.out.log
+visper.err.log
+
+# Lixo do Finder.
+.DS_Store
