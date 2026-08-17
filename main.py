@@ -82,8 +82,20 @@ class VisperApp(rumps.App):
         # resolve_device_by_name()).
         self.device_index = None
         self.device_name = load_saved_device_name()
-        self.device_is_bluetooth = False
         self.device_manual = self.device_name is not None
+        # Reclassifica a escolha salva pelo NOME: só `_make_pick_device`
+        # sabia dizer se o dispositivo é Bluetooth, e isso não sobrevive
+        # a fechar o app (só o nome é persistido). Sem isso, reabrir o
+        # vIsper com o fone já escolhido deixava device_is_bluetooth em
+        # False pra sempre e o aviso de qualidade de áudio nunca mais
+        # aparecia — justo no caso em que ele é mais útil (fone
+        # escolhido de propósito, sessão após sessão).
+        self.device_is_bluetooth = (
+            classify_device(self.device_name) if self.device_name else False
+        )
+
+        # Handle da thread de escuta — ver o guard em start_listening().
+        self._listen_thread = None
 
         # Relay do iPhone via ntfy — só liga se um tópico de verdade
         # estiver configurado em config.py (o placeholder é ""). Roda
@@ -199,6 +211,11 @@ class VisperApp(rumps.App):
             if index is None:
                 return False
             self.device_index = index
+            # Reclassifica a cada resolve, não só na hora do clique: é
+            # o único ponto por onde uma escolha manual RESTAURADA de
+            # outra execução passa antes de abrir o stream (ver
+            # __init__).
+            self.device_is_bluetooth = classify_device(self.device_name)
             return True
 
         found = guess_preferred_device()
@@ -211,14 +228,36 @@ class VisperApp(rumps.App):
     def start_listening(self, _):
         if self.listening:
             return
+        # "Parar escuta" só baixa a flag; a thread antiga ainda pode
+        # estar dentro de um stream.read() de até chunk_seconds. Sem
+        # esse guard, clicar Parar e Iniciar em seguida abria uma
+        # SEGUNDA thread (self.listening já era False) — duas
+        # transcrições paralelas alimentando o mesmo DictationSession,
+        # com ditado duplicado e fechamento na hora errada.
+        if self._listen_thread is not None and self._listen_thread.is_alive():
+            rumps.notification(
+                "vIsper",
+                "Ainda parando",
+                "A escuta anterior está terminando o trecho atual — tente de "
+                "novo em alguns segundos.",
+            )
+            return
         self._rebuild_mic_menu()
         if not self._resolve_device():
-            rumps.alert(
-                "Nenhum microfone reconhecido automaticamente (ver "
-                "config.PREFERRED_INPUT_DEVICES — hoje: DJI Mic ou fone "
-                "Bluetooth tipo Sony XM5). Confira se está ligado/pareado, "
-                "ou escolha manualmente no menu 'Escolher microfone'."
-            )
+            if self.device_manual:
+                rumps.alert(
+                    f"O microfone escolhido ('{self.device_name}') não está "
+                    "conectado agora. Reconecte ele, escolha outro no menu "
+                    "'Escolher microfone', ou volte pra 'Detectar "
+                    "automaticamente' lá dentro."
+                )
+            else:
+                rumps.alert(
+                    "Nenhum microfone reconhecido automaticamente (ver "
+                    "config.PREFERRED_INPUT_DEVICES — hoje: DJI Mic ou fone "
+                    "Bluetooth tipo Sony XM5). Confira se está ligado/pareado, "
+                    "ou escolha manualmente no menu 'Escolher microfone'."
+                )
             return
         if self.device_is_bluetooth:
             # Aviso de qualidade, não bloqueante — o Bluetooth clássico
@@ -236,7 +275,10 @@ class VisperApp(rumps.App):
                 "ativa — é do protocolo Bluetooth, não um bug do app.",
             )
         self.listening = True
-        threading.Thread(target=self._listen_loop_safe, daemon=True).start()
+        self._listen_thread = threading.Thread(
+            target=self._listen_loop_safe, daemon=True
+        )
+        self._listen_thread.start()
 
     @rumps.clicked("Parar escuta")
     def stop_listening(self, _):
@@ -274,11 +316,10 @@ class VisperApp(rumps.App):
             rumps.notification("vIsper", "Escuta parou", f"Erro no áudio: {exc}")
 
     def _listen_loop(self):
-        stream = AudioStream(self.device_index)
         if self.porcupine_detector and self.porcupine_detector.enabled:
-            self._listen_loop_porcupine(stream)
+            self._listen_loop_porcupine()
         else:
-            self._listen_loop_whisper(stream)
+            self._listen_loop_whisper(AudioStream(self.device_index))
 
     def _listen_loop_whisper(self, stream):
         for chunk in stream.chunks():
@@ -292,7 +333,7 @@ class VisperApp(rumps.App):
             if result:
                 rumps.notification("vIsper", "Status", result)
 
-    def _listen_loop_porcupine(self, stream):
+    def _listen_loop_porcupine(self):
         # NUNCA TESTADO COM MIC/HARDWARE DE VERDADE — a lógica de
         # estados (porcupine_session.py) tem 4 testes passando com
         # tudo simulado, mas essa junção com o InputStream real do
@@ -301,6 +342,15 @@ class VisperApp(rumps.App):
         # depois de rodar a v1 (Whisper contínuo) com sucesso.
         self.porcupine_detector.start()
         try:
+            # O stream é aberto DEPOIS do start() e na taxa que o
+            # próprio Porcupine exige, em vez do padrão do AudioStream:
+            # ele é rígido quanto a isso (áudio em outra taxa não dá
+            # erro, só nunca detecta nada) e a taxa dele só existe
+            # depois que o motor é criado.
+            stream = AudioStream(
+                self.device_index,
+                samplerate=self.porcupine_detector.sample_rate,
+            )
             frames = stream.raw_frames(self.porcupine_detector.frame_length)
 
             def gated_frames():

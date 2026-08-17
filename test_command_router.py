@@ -103,6 +103,29 @@ class CommandRouterTest(unittest.TestCase):
         result = router.route("vIsper claude")
         self.assertEqual(result, ("claude", ""))
 
+    def test_ganha_a_ia_citada_primeiro_e_nao_a_de_nome_mais_comprido(self):
+        # Regressão: a ordem de checagem era só por COMPRIMENTO do
+        # apelido (regra criada pra "claude code" ganhar de "claude").
+        # Só que ela também valia entre IAs DIFERENTES, então qualquer
+        # frase que citasse uma segunda IA depois abria a errada:
+        # "perplexity" (10 letras) ganhava de "claude" (6) mesmo sendo
+        # mencionada no fim. Pior: o leftover saía vazio, jogando fora
+        # a fala inteira junto.
+        calls = []
+        router = self._build(calls)
+        result = router.route("vIsper claude e não o perplexity")
+        self.assertEqual(result, ("claude", "e não o perplexity"))
+        self.assertEqual(calls, ["claude"])
+
+    def test_desempate_por_comprimento_continua_valendo_na_mesma_posicao(self):
+        # A correção acima não pode reintroduzir o bug original:
+        # "claude" e "claude code" começam na MESMA posição, então aí o
+        # mais comprido continua ganhando.
+        calls = []
+        router = self._build(calls)
+        self.assertEqual(router.route("vIsper claude code revisa isso")[0], "claude_code")
+        self.assertEqual(calls, ["claude_code"])
+
 
 if __name__ == "__main__":
     unittest.main()

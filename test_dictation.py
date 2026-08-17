@@ -189,6 +189,43 @@ class DictationSessionTest(unittest.TestCase):
         session.handle("vIsper claude")
         self.assertEqual(session.buffer, [])
 
+    def test_abrir_e_fechar_no_MESMO_trecho_manda_na_hora(self):
+        # Regressão: o pedido inteiro numa respiração só ("vIsper
+        # claude <pergunta> over") é o jeito mais natural de usar isso,
+        # e era o único caso que nenhuma das duas correções anteriores
+        # pegava — elas cuidavam da abertura e do fechamento
+        # separadamente. O "over" ia pro buffer como conteúdo: o
+        # ditado ficava aberto pra sempre esperando um fechamento que
+        # já tinha sido dito, e quando enfim fechasse a palavra "over"
+        # ia colada no texto mandado pra IA.
+        calls = []
+        session = self._build_session(calls)
+        result = session.handle("vIsper claude qual é a previsão do tempo over")
+        self.assertIn("abriu_claude", calls)
+        self.assertFalse(session.dictating, "o 'over' no mesmo trecho tinha que fechar")
+        self.assertIn(("colou", "qual é a previsão do tempo"), calls)
+        self.assertIn("mandou_enter", calls)
+        self.assertIn("abriu claude", result)
+        self.assertIn("mandou:", result)
+
+    def test_abrir_e_fechar_no_mesmo_trecho_toca_os_dois_earcons(self):
+        calls = []
+        session = self._build_session(calls, with_sounds=True)
+        session.handle("vIsper claude manda ver nisso câmbio")
+        self.assertIn("som_abriu", calls)
+        self.assertIn("som_mandou", calls)
+
+    def test_abrir_com_gatilho_de_fechamento_e_nada_mais_nao_manda_vazio(self):
+        # "vIsper claude over" abre e fecha sem conteúdo nenhum — não
+        # pode colar/mandar string vazia, nem tocar o earcon de envio.
+        calls = []
+        session = self._build_session(calls, with_sounds=True)
+        session.handle("vIsper claude over")
+        self.assertFalse(session.dictating)
+        self.assertNotIn("mandou_enter", calls)
+        self.assertNotIn("som_mandou", calls)
+        self.assertEqual([c for c in calls if isinstance(c, tuple)], [])
+
     def test_fechar_so_com_o_gatilho_continua_sem_conteudo(self):
         # Garante que a correção não inventa conteúdo quando não há
         # nada de verdade antes do gatilho (mesmo caso do teste

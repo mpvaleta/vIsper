@@ -109,6 +109,50 @@ class PorcupineSessionTest(unittest.TestCase):
         self.assertFalse(session.dictating)
         self.assertIn("mandou_enter", calls)
 
+    def test_wake_word_transcrita_junto_nao_reabre_a_ia_padrao(self):
+        # Regressão séria, e o caso NORMAL, não o excepcional: o áudio
+        # da wake word de fechamento está DENTRO do buffer de ditado (o
+        # frame que dispara a detecção entra no buffer antes de ser
+        # processado), então o Whisper transcreve ela junto com o
+        # conteúdo. O fechamento era feito em DUAS chamadas —
+        # handle(conteúdo) e depois handle(WAKE_WORD) — e a primeira já
+        # fechava o ditado sozinha por causa dessa wake word embutida.
+        # A segunda caía numa sessão OCIOSA, onde wake word sozinha
+        # quer dizer "abre a IA padrão": cada envio abria uma aba nova
+        # do Claude e deixava o app preso em modo ditado de novo.
+        calls = []
+        session = self._build_session(calls)
+        session.dictating = True
+
+        detector = FakeDetector(script=[False, False, False, False, True])
+        model = FakeModel(responses=["confirma a reuniao de amanha vIsper"])
+        ps = PorcupineSession(detector, model, session, sample_rate=16000)
+
+        ps.run([_frame() for _ in range(5)])
+
+        self.assertIn(("colou", "confirma a reuniao de amanha"), calls)
+        self.assertIn("mandou_enter", calls)
+        self.assertNotIn("abriu_claude", calls, "não podia ter aberto a IA de novo")
+        self.assertFalse(session.dictating, "não podia ter voltado pro modo ditado")
+
+    def test_gatilho_de_fechamento_falado_junto_tambem_nao_reabre(self):
+        # Mesma armadilha com "over"/"câmbio" em vez da wake word: a
+        # pessoa fala "...over" e o Porcupine fecha pelo som da wake
+        # word logo depois (ou pelo teto de tempo).
+        calls = []
+        session = self._build_session(calls)
+        session.dictating = True
+
+        detector = FakeDetector(script=[False, False, True])
+        model = FakeModel(responses=["algumas ideias pra amanha over"])
+        ps = PorcupineSession(detector, model, session, sample_rate=16000)
+
+        ps.run([_frame() for _ in range(3)])
+
+        self.assertIn(("colou", "algumas ideias pra amanha"), calls)
+        self.assertNotIn("abriu_claude", calls)
+        self.assertFalse(session.dictating)
+
     def test_conteudo_vazio_fecha_sem_colar_nem_mandar(self):
         calls = []
         session = self._build_session(calls)

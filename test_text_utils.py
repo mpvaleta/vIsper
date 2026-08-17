@@ -2,6 +2,7 @@ import unittest
 
 from text_utils import (
     contains_word,
+    find_word,
     fold_accents,
     split_after_word,
     split_before_any,
@@ -72,6 +73,19 @@ class SplitAfterWordTest(unittest.TestCase):
         self.assertEqual(split_after_word("vIsper, claude", "vIsper"), "claude")
         self.assertEqual(split_after_word("vIsper: claude.", "vIsper"), "claude")
 
+    def test_pontuacao_NAO_ASCII_depois_tambem_conta_como_vazio(self):
+        # Regressão: as bordas eram aparadas com
+        # `string.whitespace + string.punctuation`, que é só ASCII — e
+        # o Whisper transcreve travessão, reticências e aspas curvas de
+        # verdade. Com a lista antiga, "vIsper—" deixava "—" sobrando
+        # como se fosse conteúdo: o router não achava nome de IA
+        # nenhum ali, devolvia None, e a wake word sozinha
+        # simplesmente não abria a IA padrão. Mesmo bug do caso
+        # "vIsper.", só que pra pontuação não-ASCII.
+        for transcript in ["vIsper—", "vIsper…", "vIsper “", "vIsper¿", "vIsper –"]:
+            with self.subTest(transcript=transcript):
+                self.assertEqual(split_after_word(transcript, "vIsper"), "")
+
 
 class SplitBeforeAnyTest(unittest.TestCase):
     def test_retorna_o_que_vem_antes_do_primeiro_gatilho(self):
@@ -135,6 +149,27 @@ class SplitBeforeAnyTest(unittest.TestCase):
             "você tem certeza?",
         )
 
+    def test_caractere_que_muda_de_tamanho_ao_dobrar_nao_desloca_o_corte(self):
+        # Regressão séria: a posição do gatilho era achada no texto
+        # DOBRADO (minúsculo, sem acento) e usada pra fatiar o texto
+        # ORIGINAL. Isso pressupõe que dobrar preserva o comprimento —
+        # e não preserva: fold_accents() usa NFKD, que é decomposição
+        # de COMPATIBILIDADE, então "…" (U+2026, que o Whisper
+        # transcreve de verdade) vira "..." e cresce 2 caracteres. A
+        # partir dali todo índice ficava deslocado e o corte saía no
+        # lugar errado — "Bom dia… over" virava "Bom dia… ov", ou seja,
+        # o gatilho vazava pro texto colado no chat E o conteúdo era
+        # comido pela metade.
+        self.assertEqual(split_before_any("Bom dia… over", ["over"]), "Bom dia…")
+        self.assertEqual(
+            split_before_any("Preciso disso… agora câmbio", ["câmbio", "over"]),
+            "Preciso disso… agora",
+        )
+        # ½ e ﬁ também decompõem em mais de um caractere no NFKD
+        self.assertEqual(
+            split_before_any("são ½ litros over", ["over"]), "são ½ litros"
+        )
+
 
 class TextAfterWordTest(unittest.TestCase):
     def test_retorna_o_que_vem_depois_preservando_tudo(self):
@@ -173,6 +208,37 @@ class TextAfterWordTest(unittest.TestCase):
             text_after_word("vIsper claude: qual é a previsão do tempo hoje?", "claude"),
             "qual é a previsão do tempo hoje?",
         )
+
+    def test_caractere_que_muda_de_tamanho_ao_dobrar_nao_come_o_conteudo(self):
+        # Mesma regressão de SplitBeforeAnyTest, do outro lado do
+        # corte: com "…" ANTES da palavra procurada, os índices
+        # deslocavam e o conteúdo saía com os primeiros caracteres
+        # comidos ("qual é..." virava "ual é...") — texto corrompido
+        # colado direto no chat da IA.
+        self.assertEqual(
+            text_after_word("vIsper… claude qual é a previsão do tempo", "claude"),
+            "qual é a previsão do tempo",
+        )
+        self.assertEqual(
+            text_after_word("vIsper… claude, confirma isso!", "claude"),
+            "confirma isso!",
+        )
+
+
+class FindWordTest(unittest.TestCase):
+    def test_devolve_a_posicao_da_primeira_ocorrencia(self):
+        self.assertEqual(find_word("claude e nao o perplexity", "claude"), 0)
+        self.assertEqual(find_word("claude e nao o perplexity", "perplexity"), 15)
+
+    def test_none_quando_nao_aparece_como_palavra_inteira(self):
+        self.assertIsNone(find_word("discover something", "over"))
+        self.assertIsNone(find_word("qualquer coisa", "claude"))
+
+    def test_ignora_acento_e_maiuscula_pra_achar(self):
+        self.assertEqual(find_word("abre o CÓDIGO agora", "codigo"), 7)
+
+    def test_palavra_vazia_nunca_acha(self):
+        self.assertIsNone(find_word("qualquer coisa", ""))
 
 
 if __name__ == "__main__":

@@ -132,9 +132,62 @@ class RelayListenerTest(unittest.TestCase):
         ):
             listener.listen_forever()
 
-        # 3 falhas seguidas dobram (5, 10, 20); reconectar na 4ª
-        # reseta; a falha seguinte (5ª) volta a esperar só 5s de novo
-        self.assertEqual(sleep_calls, [5, 10, 20, 5])
+        # 3 falhas seguidas dobram (5, 10, 20); a 4ª conecta de verdade
+        # e reseta pra 5 — e espera esses 5s antes de reconectar, mesmo
+        # tendo terminado limpa (era o bug: stream que acaba SEM
+        # exceção reconectava na hora, sem pausa nenhuma). A falha
+        # seguinte (5ª) continua de onde o backoff parou, 10s.
+        self.assertEqual(sleep_calls, [5, 10, 20, 5, 10])
+
+    def test_stream_que_termina_limpo_nao_reconecta_em_laco_sem_pausa(self):
+        # Regressão: quando o ntfy fecha o stream sem erro (servidor
+        # reiniciou, proxy derrubou por ociosidade), iter_lines()
+        # simplesmente acaba e nenhuma exceção é levantada. Antes, esse
+        # caminho não passava por time.sleep() nenhum e o `while`
+        # reabria a conexão na hora — um servidor que aceitasse e
+        # fechasse na sequência virava um laço de requisições HTTPS a
+        # toda velocidade contra o ntfy.sh.
+        calls = []
+        session = self._build_session(calls)
+        listener = RelayListener(session, topic="topico-que-fecha-limpo")
+        sleep_calls = []
+        attempt = {"n": 0}
+
+        def fake_get(*args, **kwargs):
+            attempt["n"] += 1
+            if attempt["n"] >= 4:
+                listener.running = False
+            return FakeResponse([])  # conecta e fecha limpo, sem exceção
+
+        with patch("relay_listener.requests.get", side_effect=fake_get), patch(
+            "relay_listener.time.sleep", side_effect=sleep_calls.append
+        ):
+            listener.listen_forever()
+
+        self.assertEqual(
+            len(sleep_calls),
+            3,
+            "toda reconexão precisa esperar, não só as que falharam com exceção",
+        )
+        self.assertTrue(all(s > 0 for s in sleep_calls))
+
+    def test_nao_espera_depois_de_stop(self):
+        # stop() no meio do stream não pode custar mais um backoff
+        # inteiro antes da thread sair.
+        calls = []
+        session = self._build_session(calls)
+        listener = RelayListener(session, topic="topico-que-para-no-meio")
+        sleep_calls = []
+
+        def fake_get(*args, **kwargs):
+            return FakeResponse([], on_exhausted=listener.stop)
+
+        with patch("relay_listener.requests.get", side_effect=fake_get), patch(
+            "relay_listener.time.sleep", side_effect=sleep_calls.append
+        ):
+            listener.listen_forever()
+
+        self.assertEqual(sleep_calls, [])
 
 
 if __name__ == "__main__":

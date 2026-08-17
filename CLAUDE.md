@@ -52,10 +52,16 @@ não bug daqui).
   pesquisa: nenhum produto de chat de IA aceita áudio bruto direto
   via API/web, sempre precisa transcrever pra texto primeiro — o que
   o pipeline Whisper já faz de qualquer forma.
-- Prioridade de correspondência de trigger de IA: o apelido mais
-  longo primeiro (`command_router.py`) — evita "claude" casar como
-  substring de "claude code" antes de "claude code" ter a chance de
-  ganhar. Já foi um bug real, corrigido.
+- Prioridade de correspondência de trigger de IA: ganha o apelido que
+  aparece PRIMEIRO na fala; empate na mesma posição vai pro mais
+  COMPRIDO (`command_router.py`). As duas metades da regra vêm de bugs
+  reais, corrigidos: o desempate por comprimento evita "claude" casar
+  como substring de "claude code" antes de "claude code" ter chance de
+  ganhar; e ordenar por POSIÇÃO antes disso evita o inverso — quando
+  era só "o mais comprido primeiro", qualquer frase que citasse uma
+  segunda IA depois abria a errada ("vIsper claude e não o perplexity"
+  abria o Perplexity, porque 10 letras ganhavam de 6, e ainda jogava
+  fora a fala inteira junto).
 - **iPhone precisa ser um app separado que aciona o Mac, não que
   repete a automação sozinho** — iOS não deixa um app simular teclado
   dentro de outro app (sandbox). Não existe "AppleScript do iOS".
@@ -157,7 +163,13 @@ Módulos principais (mic local, sempre ativos):
     comparado contra outro gatilho depois. Apara pontuação nas bordas
     (não só espaço) — sem isso, "vIsper." (Whisper adiciona ponto
     final com frequência) não abria a IA padrão, porque "." sobrava
-    como se fosse conteúdo depois da wake word.
+    como se fosse conteúdo depois da wake word. Essa aparagem é por
+    CATEGORIA Unicode (`_is_edge_char()`), não por uma lista fixa de
+    caracteres ASCII: era `string.whitespace + string.punctuation`, e
+    aí "vIsper—" (o Whisper transcreve travessão, reticências e aspas
+    curvas de verdade) deixava "—" sobrando como conteúdo e a wake
+    word sozinha simplesmente não abria a IA padrão — o mesmo bug do
+    caso "vIsper.", só que pra pontuação não-ASCII.
   - `split_before_any()`/`text_after_word()` — resultado PODE virar
     conteúdo real colado no chat, então preservam capitalização/
     acento/pontuação REAL do original (ao contrário da família
@@ -169,7 +181,19 @@ Módulos principais (mic local, sempre ativos):
     assimetria de propósito: apara pontuação da borda ESQUERDA (logo
     depois da palavra-gatilho, tipo "claude," — sempre artefato de
     como a palavra foi dita) mas só espaço da borda DIREITA (pode ser
-    fim de frase real, tipo "...tempo hoje?"). 27 testes.
+    fim de frase real, tipo "...tempo hoje?").
+    **Cuidado que mordeu de novo, e pior**: essas duas acham o gatilho
+    no texto DOBRADO (minúsculo/sem acento) e fatiam o texto ORIGINAL
+    com esse índice. Isso pressupunha que dobrar preserva o
+    comprimento — e não preserva: `fold_accents()` usa NFKD, que é
+    decomposição de COMPATIBILIDADE, então "…" vira "..." (+2) e
+    ligaduras tipo "ﬁ" viram "fi" (+1). O resultado era texto
+    corrompido colado direto no chat da IA ("Bom dia… over" virava
+    "Bom dia… ov"; "vIsper… claude qual é..." virava "ual é..."). Hoje
+    `_fold_with_index_map()` guarda, pra cada caractere do texto
+    dobrado, de qual posição do original ele veio — **qualquer função
+    nova que ache posição no dobrado e fatie o original TEM que usar
+    esse mapa**. 35 testes.
 - `audio_input.py` — lista/detecta microfones (`guess_preferred_device()`,
   `classify_device()`, orientados por `config.PREFERRED_INPUT_DEVICES` —
   casamento por SUBSTRING simples, não palavra inteira, porque nome de
@@ -207,7 +231,10 @@ Módulos principais (mic local, sempre ativos):
   esse contrato (de string solta pra tupla) exigiu atualizar os 7
   testes já existentes — mecânico, mas intencional: quem chamar
   `route()` de algum lugar novo precisa desempacotar a tupla, não
-  tratar o retorno como string. 11 testes dedicados.
+  tratar o retorno como string. A escolha da IA é por POSIÇÃO do
+  apelido na fala (mais cedo ganha), com desempate por comprimento —
+  ver o raciocínio e o bug que motivou cada metade em "Decisões de
+  arquitetura". 13 testes dedicados.
 - `dictation.py` — a máquina de estados ocioso/ditando. Fecha com a
   wake word OU qualquer `CLOSE_TRIGGERS`. A mensagem final é o BUFFER
   INTERNO (populado por chamadas anteriores de `.handle()`) **mais**
@@ -217,14 +244,21 @@ Módulos principais (mic local, sempre ativos):
   abriu (`command_router.route()`'s `leftover`) — as duas pontas
   corrigidas depois que testes concretos mostraram que "terminar/
   começar a frase colado com o gatilho, sem pausa" descartava conteúdo
-  de verdade em qualquer uma das duas. Ao integrar qualquer fonte de
-  áudio nova, o que importa lembrar agora é que o texto da chamada que
-  ABRE e o texto da chamada que FECHA podem os dois ter conteúdo real
-  misturado com o gatilho, não só as chamadas do meio. `DictationSession`
-  aceita `on_open`/`on_send` opcionais (callbacks sem argumento, só
-  feedback — não afetam a máquina de estados; `on_send` NÃO dispara no
-  caso "cancelado"), usados por `main.py` pra tocar o earcon. 19
-  testes dedicados.
+  de verdade em qualquer uma das duas. E o MESMO trecho pode abrir e
+  fechar de uma vez ("vIsper claude qual é a previsão do tempo over",
+  o pedido inteiro numa respiração só — o jeito mais natural de usar
+  isso): o `leftover` da abertura passa pela mesma checagem de
+  fechamento, senão o "over" ia pro buffer como se fosse conteúdo, o
+  ditado ficava aberto pra sempre esperando um fechamento que já tinha
+  sido dito, e a palavra "over" acabava colada no texto mandado pra
+  IA. Ao integrar qualquer fonte de áudio nova, o que importa lembrar
+  agora é que o texto da chamada que ABRE e o texto da chamada que
+  FECHA podem os dois ter conteúdo real misturado com o gatilho — e
+  podem até ser a MESMA chamada —, não só as chamadas do meio.
+  `DictationSession` aceita `on_open`/`on_send` opcionais (callbacks
+  sem argumento, só feedback — não afetam a máquina de estados;
+  `on_send` NÃO dispara no caso "cancelado"), usados por `main.py` pra
+  tocar o earcon. 22 testes dedicados.
 - `actions.py` — as ações de verdade (abrir app/URL, colar texto,
   apertar Enter) via `subprocess`/`osascript`. Todo `subprocess.run()`
   usa `check=True` — antes, uma falha (ex.: permissão de
@@ -252,10 +286,26 @@ Módulos principais (mic local, sempre ativos):
   do submenu compara por NOME, não
   índice — importante pra mostrar certo logo no primeiro
   `_rebuild_mic_menu()` do `__init__`, antes de qualquer índice ter
-  sido resolvido de verdade. Thread de escuta envolvida em try/except
-  (`_listen_loop_safe`) — sem isso, stream falhando ao abrir (ex.:
-  fone Bluetooth desconectou) travava `self.listening=True` pra
-  sempre, exigindo reiniciar o app. **A API do rumps usada aqui
+  sido resolvido de verdade. Uma escolha manual RESTAURADA de outra
+  execução é reclassificada pelo nome (`classify_device()`) no
+  `__init__` e em `_resolve_device()` — só o NOME é persistido, então
+  sem isso `device_is_bluetooth` voltava False ao reabrir o app e o
+  aviso de qualidade Bluetooth nunca mais aparecia, justo no caso em
+  que ele é mais útil (fone escolhido de propósito, sessão após
+  sessão). "Iniciar escuta" tem dois guards, não um: `self.listening`
+  E a thread anterior ainda viva — "Parar escuta" só baixa a flag, e a
+  thread antiga pode continuar até `chunk_seconds` dentro de um
+  `stream.read()`; sem o segundo guard, Parar seguido de Iniciar abria
+  uma SEGUNDA thread de escuta, com duas transcrições paralelas
+  alimentando o mesmo `DictationSession`. Thread de escuta envolvida
+  em try/except (`_listen_loop_safe`) — sem isso, stream falhando ao
+  abrir (ex.: fone Bluetooth desconectou) travava `self.listening=True`
+  pra sempre, exigindo reiniciar o app. 12 testes
+  (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
+  `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
+  de dispositivo, os guards de "Iniciar escuta" e o checkmark do
+  submenu; NÃO cobre nada de AppKit/áudio de verdade). **A API do
+  rumps usada aqui
   (`MenuItem.clear()/.add()`, `.state`, `.title` mutável) foi
   conferida linha a linha contra o source real do pacote (baixado da
   PyPI, versão 0.4.0 — a mesma do `requirements.txt`), não escrita de
@@ -268,16 +318,32 @@ Módulos de entrada alternativa (compartilham o mesmo
 "abrir por um arquivo de áudio" nunca ficam em estados diferentes):
 - `relay_listener.py` — escuta o tópico ntfy, alimenta o
   `DictationSession`. Já plugado em `main.py`. Backoff exponencial no
-  reconnect (5s→10s→20s...até 60s, reseta ao reconectar). **Nunca
-  testado contra o ntfy.sh de verdade** — o parsing foi conferido
-  contra a documentação oficial do formato JSON deles, mas não contra
-  uma conexão real.
+  reconnect (5s→10s→20s...até 60s, reseta ao reconectar) — aplicado a
+  TODA reconexão, não só às que morreram com exceção: um stream que
+  acaba limpo (ntfy reiniciou, proxy fechou por ociosidade) não
+  levanta erro nenhum e antes caía direto no próximo `while`,
+  reabrindo na hora, sem pausa — um servidor que aceitasse e fechasse
+  na sequência virava um laço de requisições HTTPS a toda velocidade
+  contra o ntfy.sh. Linha de JSON malformada pula só aquela linha, em
+  vez de derrubar uma conexão que está funcionando. **Nunca testado
+  contra o ntfy.sh de verdade** — o parsing foi conferido contra a
+  documentação oficial do formato JSON deles, mas não contra uma
+  conexão real.
 - `wake_word_porcupine.py` — wrapper do motor Porcupine. Escrito
   contra a API real do pacote `pvporcupine` (conferida, não foi de
   memória). Não dá pra testar detecção de verdade sem AccessKey +
   arquivo `.ppn` reais.
 - `porcupine_session.py` — a orquestração ocioso/ditando descrita
-  acima. Já ligado em `main.py`.
+  acima. Já ligado em `main.py`. O fechamento entrega tudo numa
+  chamada só a `DictationSession.handle()`, com a wake word emendada
+  no fim do conteúdo transcrito. Isso já foram DUAS chamadas
+  (conteúdo, depois wake word sozinha) e era um bug sério: o áudio da
+  wake word de fechamento está DENTRO do buffer de ditado (o frame que
+  dispara a detecção entra no buffer antes de ser processado), então o
+  Whisper normalmente transcreve ela junto — a primeira chamada já
+  fechava o ditado e a segunda caía numa sessão OCIOSA, onde wake word
+  sozinha quer dizer "abre a IA padrão". Resultado: cada envio abria
+  uma aba nova do Claude e deixava o app preso em modo ditado de novo.
 - `audio_file_input.py` — transcreve um arquivo de áudio (voice notes
   etc.) ou vigia uma pasta. **Ainda não plugado em `main.py`** — sem
   menu nem forma de escolher a pasta ainda.
@@ -291,7 +357,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 124 testes no total. Rodar com:
+- `test_*.py` — 153 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que

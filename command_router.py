@@ -10,7 +10,7 @@ que uma IA já está aberta (ver dictation.py).
 """
 
 from config import WAKE_WORD, DEFAULT_AI, AI_TRIGGERS
-from text_utils import contains_word, split_after_word, text_after_word
+from text_utils import contains_word, find_word, split_after_word, text_after_word
 
 
 class CommandRouter:
@@ -44,23 +44,39 @@ class CommandRouter:
             self.ai_actions[DEFAULT_AI]()
             return DEFAULT_AI, ""
 
-        # checa os apelidos mais longos primeiro: senão "claude" bate
-        # como substring de "claude code" e "claude code" nunca ganha
-        all_triggers = [
-            (trigger, ai_name)
-            for ai_name, triggers in AI_TRIGGERS.items()
-            for trigger in triggers
-        ]
-        all_triggers.sort(key=lambda pair: len(pair[0]), reverse=True)
+        # Ganha o apelido que aparece PRIMEIRO na fala; empate na mesma
+        # posição vai pro mais COMPRIDO.
+        #
+        # Antes isso era só "o mais comprido primeiro", sem olhar
+        # posição — o que resolvia o caso que motivou a regra ("claude"
+        # casando como substring de "claude code") mas quebrava
+        # qualquer frase que mencionasse uma segunda IA depois:
+        # "vIsper claude e não o perplexity" abria o PERPLEXITY (10
+        # letras ganhava de 6) e ainda por cima devolvia leftover
+        # vazio, jogando fora a fala inteira. Ordenar por posição
+        # devolve o comportamento que config.py sempre documentou ("o
+        # primeiro apelido que aparecer decide") e mantém o caso
+        # original resolvido: "claude" e "claude code" começam na MESMA
+        # posição, então o desempate por comprimento continua valendo
+        # e "claude code" continua ganhando.
+        best = None  # ((posição, -comprimento), trigger, nome_da_ia)
+        for ai_name, triggers in AI_TRIGGERS.items():
+            for trigger in triggers:
+                position = find_word(after_wake, trigger)
+                if position is None:
+                    continue
+                key = (position, -len(trigger))
+                if best is None or key < best[0]:
+                    best = (key, trigger, ai_name)
 
-        for trigger, ai_name in all_triggers:
-            if contains_word(after_wake, trigger):
-                self.ai_actions[ai_name]()
-                # Recalcula sobre o texto ORIGINAL (não `after_wake`,
-                # que já veio dobrado/minúsculo/sem pontuação) — o
-                # resto pode virar conteúdo real de ditado.
-                original_after_wake = text_after_word(transcript, WAKE_WORD)
-                leftover = text_after_word(original_after_wake, trigger)
-                return ai_name, leftover
+        if best is None:
+            return None
 
-        return None
+        _key, trigger, ai_name = best
+        self.ai_actions[ai_name]()
+        # Recalcula sobre o texto ORIGINAL (não `after_wake`, que já
+        # veio dobrado/minúsculo/sem pontuação) — o resto pode virar
+        # conteúdo real de ditado.
+        original_after_wake = text_after_word(transcript, WAKE_WORD)
+        leftover = text_after_word(original_after_wake, trigger)
+        return ai_name, leftover

@@ -14,6 +14,11 @@ Fluxo:
   "câmbio" / "over"        -> cola o buffer inteiro no chat, aperta
   (ou "vIsper" de novo)       Enter, volta pro modo ocioso
 
+Isso tudo pode caber numa respiração só também — "vIsper claude qual é
+a previsão do tempo over" abre, dita e manda de uma vez, num único
+trecho transcrito. Abertura e fechamento são checados no mesmo texto,
+não só em chamadas separadas.
+
 O sinal de fechamento é a wake word de novo OU qualquer uma das
 palavras em config.CLOSE_TRIGGERS (hoje: "câmbio"/"over" — emprestado
 do vocabulário de rádio, ver config.py pro raciocínio completo).
@@ -33,6 +38,16 @@ console.picovoice.ai — ver nota em wake_word_porcupine.py).
 
 from config import WAKE_WORD, CLOSE_TRIGGERS
 from text_utils import contains_word, split_before_any
+
+# Tudo que fecha um ditado: a própria wake word de novo, mais os
+# CLOSE_TRIGGERS. Uma lista só, pra checagem e recorte não poderem
+# divergir (a checagem dizer "fecha" e o recorte não achar onde
+# cortar, ou vice-versa).
+CLOSE_WORDS = [WAKE_WORD] + list(CLOSE_TRIGGERS)
+
+
+def _has_close_trigger(text: str) -> bool:
+    return any(contains_word(text, word) for word in CLOSE_WORDS)
 
 
 class DictationSession:
@@ -70,44 +85,70 @@ class DictationSession:
 
         if not self.dictating:
             matched = self.router.route(text)
-            if matched:
-                ai_name, leftover = matched
-                self.dictating = True
-                # Resgata conteúdo real que veio no MESMO trecho que o
-                # comando de abrir — ex.: "vIsper claude qual é a
-                # previsão do tempo" tudo numa respiração só. Sem
-                # isso, só o nome da IA seria usado e o resto
-                # descartado (mesma classe de bug já corrigida do lado
-                # do FECHAMENTO, ver split_before_any() abaixo).
-                self.buffer = [leftover] if leftover else []
-                if self.on_open:
-                    self.on_open()
-                return f"abriu {ai_name} — ouvindo ditado"
-            return None
+            if not matched:
+                return None
 
-        if contains_word(text, WAKE_WORD) or any(
-            contains_word(text, trigger) for trigger in CLOSE_TRIGGERS
-        ):
-            # Resgata conteúdo real que veio no MESMO trecho transcrito
-            # que o gatilho de fechamento, antes de fechar — comum
-            # terminar a frase e já emendar "over"/"câmbio" sem pausa,
-            # os dois caindo no mesmo chunk do Whisper. Sem isso, esse
-            # trecho inteiro seria perdido (só o buffer de chamadas
-            # ANTERIORES entraria na mensagem final).
-            prefix = split_before_any(text, [WAKE_WORD] + list(CLOSE_TRIGGERS))
-            if prefix:
-                self.buffer.append(prefix)
-
-            full_text = " ".join(self.buffer).strip()
-            self.dictating = False
+            ai_name, leftover = matched
+            self.dictating = True
             self.buffer = []
-            if full_text:
-                self.paste_action(full_text)
-                self.send_action()
-                if self.on_send:
-                    self.on_send()
-                return "mandou: " + full_text[:60]
-            return "cancelado (nada foi ditado)"
+            if self.on_open:
+                self.on_open()
+            opened = f"abriu {ai_name} — ouvindo ditado"
+            if not leftover:
+                return opened
+
+            # `leftover` é o conteúdo real que veio no MESMO trecho que
+            # o comando de abrir — ex.: "vIsper claude qual é a
+            # previsão do tempo" tudo numa respiração só. Sem isso, só
+            # o nome da IA seria usado e o resto descartado.
+            #
+            # E esse mesmo trecho pode trazer o gatilho de FECHAMENTO
+            # junto ("vIsper claude qual é a previsão do tempo over" —
+            # pedido inteiro numa respiração só, que é justamente o
+            # jeito mais natural de usar isso). Antes, o "over" ia pro
+            # buffer como se fosse conteúdo: o ditado ficava aberto pra
+            # sempre esperando um fechamento que já tinha sido dito, e
+            # quando enfim fechasse a palavra "over" ia colada no texto
+            # mandado pra IA. As duas pontas (abertura e fechamento) já
+            # tinham sido corrigidas separadamente; faltava o caso em
+            # que as duas caem no MESMO trecho.
+            if _has_close_trigger(leftover):
+                return f"{opened}; {self._close(leftover)}"
+
+            self.buffer = [leftover]
+            return opened
+
+        if _has_close_trigger(text):
+            return self._close(text)
 
         self.buffer.append(text)
         return "ditando…"
+
+    def _close(self, text: str):
+        """
+        Fecha o ditado a partir do trecho que contém o gatilho: junta o
+        buffer acumulado com o que veio ANTES do gatilho nesse mesmo
+        trecho, cola e manda. Volta pro estado ocioso mesmo quando não
+        havia nada pra mandar.
+        """
+        # Resgata conteúdo real que veio no MESMO trecho transcrito que
+        # o gatilho de fechamento, antes de fechar — comum terminar a
+        # frase e já emendar "over"/"câmbio" sem pausa, os dois caindo
+        # no mesmo chunk do Whisper. Sem isso, esse trecho inteiro
+        # seria perdido (só o buffer de chamadas ANTERIORES entraria na
+        # mensagem final).
+        prefix = split_before_any(text, CLOSE_WORDS)
+        if prefix:
+            self.buffer.append(prefix)
+
+        full_text = " ".join(self.buffer).strip()
+        self.dictating = False
+        self.buffer = []
+        if not full_text:
+            return "cancelado (nada foi ditado)"
+
+        self.paste_action(full_text)
+        self.send_action()
+        if self.on_send:
+            self.on_send()
+        return "mandou: " + full_text[:60]

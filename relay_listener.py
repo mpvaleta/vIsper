@@ -71,7 +71,16 @@ class RelayListener:
                             break
                         if not line:
                             continue  # linha de keepalive do ntfy, ignora
-                        event = json.loads(line)
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            # Uma linha malformada (glitch de rede,
+                            # proxy que injetou algo) é ruído de UMA
+                            # mensagem — não é motivo pra derrubar uma
+                            # conexão que está funcionando e esperar o
+                            # backoff inteiro. Pula a linha e segue
+                            # ouvindo.
+                            continue
                         if event.get("event") != "message":
                             continue  # ignora "open"/keepalive, só processa mensagem
                         text = event.get("message", "")
@@ -80,14 +89,28 @@ class RelayListener:
                         result = self.session.handle(text)
                         if result and on_result:
                             on_result(result)
-            except (requests.RequestException, json.JSONDecodeError):
-                # rede caiu ou o Mac saiu de suspensão — espera um
-                # pouco e tenta reconectar, sem derrubar a thread.
-                # Backoff exponencial (5s, 10s, 20s... até 60s) em vez
-                # de fixo: recupera rápido de uma falha rápida, mas
-                # não fica martelando o servidor numa queda longa.
-                time.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
+            except requests.RequestException:
+                # rede caiu ou o Mac saiu de suspensão — cai no mesmo
+                # backoff do fim do loop, sem derrubar a thread.
+                pass
+
+            # Espera ANTES de reconectar, tenha a conexão morrido com
+            # erro ou terminado limpa. O caso "terminou limpa" (ntfy
+            # reiniciou, proxy fechou o stream por ociosidade) não
+            # levanta exceção nenhuma: antes ele caía direto no próximo
+            # `while`, reabrindo a conexão na hora, sem pausa — se o
+            # servidor estivesse aceitando e fechando na sequência,
+            # isso virava um laço de requisições HTTPS sem freio, à
+            # toda velocidade, contra o ntfy.sh.
+            #
+            # Backoff exponencial (5s, 10s, 20s... até 60s) em vez de
+            # fixo: recupera rápido de uma falha rápida, mas não fica
+            # martelando o servidor numa queda longa. Reseta assim que
+            # uma conexão dá certo de novo (acima).
+            if not self.running:
+                break
+            time.sleep(backoff_seconds)
+            backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
 
     def stop(self):
         self.running = False

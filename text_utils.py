@@ -12,17 +12,41 @@ como PALAVRA INTEIRA evita isso.
 """
 
 import re
-import string
 import unicodedata
 
-# Whitespace + pontuação — usado pra aparar sobra de pontuação nas
-# bordas de um trecho já isolado (ex.: o que vem depois da wake word).
-# Existe porque o Whisper adiciona pontuação de frase com frequência
-# mesmo em falas curtas (ex.: transcreve só a wake word como
-# "vIsper." com ponto final) — sem aparar isso, um resto que deveria
-# contar como "nada depois da wake word" sobra como "." (não-vazio) e
-# o comando inteiro falha silenciosamente. Ver split_after_word().
-_EDGE_CHARS = string.whitespace + string.punctuation
+
+def _is_edge_char(ch: str) -> bool:
+    """
+    True pra espaço em branco e pra QUALQUER pontuação/símbolo Unicode —
+    usado pra aparar sobra de pontuação nas bordas de um trecho já
+    isolado (ex.: o que vem depois da wake word). Existe porque o
+    Whisper adiciona pontuação de frase com frequência mesmo em falas
+    curtas (ex.: transcreve só a wake word como "vIsper." com ponto
+    final) — sem aparar isso, um resto que deveria contar como "nada
+    depois da wake word" sobra como "." (não-vazio) e o comando inteiro
+    falha silenciosamente. Ver split_after_word().
+
+    Testa por CATEGORIA Unicode em vez de uma lista fixa de caracteres
+    ASCII (era `string.whitespace + string.punctuation`): o Whisper
+    transcreve travessão, reticências e aspas curvas de VERDADE
+    ("—", "…", "“”", "¿", "¡"), nenhum deles ASCII. Com a lista antiga,
+    "vIsper—" deixava "—" sobrando como se fosse conteúdo e a wake word
+    sozinha simplesmente não abria a IA padrão — o mesmo bug que o caso
+    "vIsper." já tinha corrigido, só que pra pontuação não-ASCII.
+    """
+    return ch.isspace() or unicodedata.category(ch)[0] in ("P", "S")
+
+
+def _strip_edges(text: str, left: bool = True, right: bool = True) -> str:
+    """str.strip() consciente de Unicode — ver _is_edge_char()."""
+    start, end = 0, len(text)
+    if left:
+        while start < end and _is_edge_char(text[start]):
+            start += 1
+    if right:
+        while end > start and _is_edge_char(text[end - 1]):
+            end -= 1
+    return text[start:end]
 
 
 def fold_accents(text: str) -> str:
@@ -33,6 +57,70 @@ def fold_accents(text: str) -> str:
     return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
 
+def _fold_with_index_map(text: str):
+    """
+    Dobra o texto (minúsculas + sem acento) devolvendo TAMBÉM um mapa
+    que leva cada posição do texto DOBRADO de volta pra posição
+    correspondente no texto ORIGINAL.
+
+    POR QUE ISSO PRECISA EXISTIR (bug real, já corrigido aqui): as
+    funções que preservam o texto original (split_before_any() e
+    text_after_word()) acham o gatilho no texto dobrado e depois
+    FATIAM o texto original com esse índice. Isso só funciona se dobrar
+    preservar o comprimento caractere a caractere — o que NÃO é
+    verdade. fold_accents() usa NFKD (decomposição de COMPATIBILIDADE),
+    então "…" (U+2026, que o Whisper transcreve de verdade) vira "..."
+    e cresce 2 caracteres; ligaduras tipo "ﬁ" viram "fi" e crescem 1.
+    A partir daí todo índice fica deslocado e o texto colado no chat
+    sai corrompido — por exemplo:
+        split_before_any("Bom dia… over", ["over"])
+          -> "Bom dia… ov"        (vazava o gatilho e comia conteúdo)
+        text_after_word("vIsper… claude qual é a previsão", "claude")
+          -> "ual é a previsão"   (comia os 2 primeiros caracteres)
+
+    Dobrando CARACTERE A CARACTERE dá pra registrar, pra cada
+    caractere produzido, de qual índice do original ele veio — aí o
+    fatiamento volta a ser exato mesmo quando dobrar muda o tamanho.
+    Um caractere pode produzir vários (…→...), um (á→a) ou nenhum (um
+    acento combinante solto, em texto já decomposto/NFD).
+
+    Retorna (texto_dobrado, mapa). O mapa tem len(dobrado)+1 entradas:
+    a última é len(text), pra um match que termina no fim da string
+    também ter pra onde apontar.
+    """
+    pieces = []
+    index_map = []
+    for original_index, ch in enumerate(text):
+        piece = fold_accents(ch.lower())
+        pieces.append(piece)
+        index_map.extend([original_index] * len(piece))
+    index_map.append(len(text))
+    return "".join(pieces), index_map
+
+
+def _fold_for_match(text: str) -> str:
+    """Mesmo resultado de _fold_with_index_map()[0], sem montar o mapa —
+    pra quem só compara e não precisa fatiar o original de volta."""
+    return "".join(fold_accents(ch.lower()) for ch in text)
+
+
+def _word_pattern(*words) -> str:
+    """
+    Regex que casa qualquer uma das `words` como PALAVRA INTEIRA.
+
+    Usa lookaround (?<!\\w)/(?!\\w) em vez de \\b: \\b é definido em
+    relação a caractere de palavra, então um gatilho que COMEÇA ou
+    TERMINA com pontuação (config.AI_TRIGGERS é editável à mão — nada
+    impede um apelido tipo "gpt-4o+" amanhã) inverte o sentido do \\b e
+    o apelido simplesmente nunca casa. O lookaround exprime direto o
+    que a gente quer: "não pode ter caractere de palavra colado nas
+    bordas". Pra gatilhos que só têm letras — todos os de hoje — o
+    comportamento é idêntico ao de \\b.
+    """
+    alternatives = "|".join(re.escape(w) for w in words)
+    return r"(?<!\w)(?:" + alternatives + r")(?!\w)"
+
+
 def contains_word(haystack: str, word: str) -> bool:
     """
     True se `word` aparece em `haystack` como palavra (ou frase)
@@ -40,12 +128,27 @@ def contains_word(haystack: str, word: str) -> bool:
     Ignora maiúscula/minúscula e acento dos dois lados. `word` pode
     ter espaço dentro (frases tipo "claude code" funcionam igual).
     """
+    return find_word(haystack, word) is not None
+
+
+def find_word(haystack: str, word: str):
+    """
+    Posição da primeira ocorrência de `word` como palavra inteira em
+    `haystack` (medida no texto DOBRADO, ver _fold_for_match()), ou
+    None se não aparecer.
+
+    Existe pro command_router.py conseguir escolher a IA pelo apelido
+    que aparece PRIMEIRO na fala, não pelo mais comprido — só saber
+    "apareceu ou não" (contains_word) não dá pra desempatar isso.
+    Comparar posições só faz sentido entre chamadas com o MESMO
+    `haystack`, que é exatamente como o router usa.
+    """
     if not word:
-        return False
-    haystack_folded = fold_accents(haystack.lower())
-    word_folded = fold_accents(word.lower())
-    pattern = r"\b" + re.escape(word_folded) + r"\b"
-    return re.search(pattern, haystack_folded) is not None
+        return None
+    match = re.search(
+        _word_pattern(_fold_for_match(word)), _fold_for_match(haystack)
+    )
+    return match.start() if match else None
 
 
 def split_after_word(haystack: str, word: str) -> str:
@@ -58,12 +161,13 @@ def split_after_word(haystack: str, word: str) -> str:
     `haystack`) — funciona bem porque quem usa isso só compara contra
     outros gatilhos depois, nunca mostra esse texto pro usuário.
     """
-    haystack_folded = fold_accents(haystack.lower())
-    word_folded = fold_accents(word.lower())
-    match = re.search(r"\b" + re.escape(word_folded) + r"\b", haystack_folded)
+    if not word:
+        return ""
+    haystack_folded = _fold_for_match(haystack)
+    match = re.search(_word_pattern(_fold_for_match(word)), haystack_folded)
     if not match:
         return ""
-    return haystack_folded[match.end():].strip(_EDGE_CHARS)
+    return _strip_edges(haystack_folded[match.end():])
 
 
 def text_after_word(haystack: str, word: str) -> str:
@@ -89,12 +193,17 @@ def text_after_word(haystack: str, word: str) -> str:
 
     Retorna "" se `word` não aparecer como palavra inteira.
     """
-    haystack_folded = fold_accents(haystack.lower())
-    word_folded = fold_accents(word.lower())
-    match = re.search(r"\b" + re.escape(word_folded) + r"\b", haystack_folded)
+    if not word:
+        return ""
+    haystack_folded, index_map = _fold_with_index_map(haystack)
+    match = re.search(_word_pattern(_fold_for_match(word)), haystack_folded)
     if not match:
         return ""
-    return haystack[match.end():].lstrip(_EDGE_CHARS).rstrip()
+    # index_map traduz a posição no texto dobrado pra posição no texto
+    # ORIGINAL — dobrar pode mudar o comprimento (ver
+    # _fold_with_index_map()), então fatiar o original com o índice cru
+    # do match comia/deslocava caracteres do conteúdo de verdade.
+    return _strip_edges(haystack[index_map[match.end()]:], right=False).rstrip()
 
 
 def split_before_any(haystack: str, words) -> str:
@@ -112,11 +221,10 @@ def split_before_any(haystack: str, words) -> str:
     ESPAÇO nas bordas (não pontuação — "?"/"!"/"." no fim de uma
     frase real dita pela pessoa tem que sobreviver; quem quer
     aparar pontuação porque o resultado NUNCA é mostrado pra ninguém
-    é split_after_word(), não esta função). Isso é seguro porque
-    fold_accents()+lower() preservam o comprimento da string caractere
-    a caractere pra acentuação comum em PT/EN (á,ã,â,à,ç,é,ê,í,ó,ô,õ,ú
-    etc.) — a posição do match no texto "dobrado" bate com a mesma
-    posição no texto original.
+    é split_after_word(), não esta função). A posição do gatilho é
+    traduzida do texto dobrado pro original por _fold_with_index_map()
+    — dobrar NÃO preserva o comprimento em todos os casos (ver o
+    porquê, com exemplos, na docstring de lá).
 
     Existe pra resgatar conteúdo dito no MESMO trecho transcrito que
     um gatilho de fechamento apareceu — sem isso, DictationSession
@@ -129,9 +237,10 @@ def split_before_any(haystack: str, words) -> str:
     if not words:
         return haystack.strip()
 
-    haystack_folded = fold_accents(haystack.lower())
-    alternatives = "|".join(re.escape(fold_accents(w.lower())) for w in words)
-    match = re.search(r"\b(?:" + alternatives + r")\b", haystack_folded)
+    haystack_folded, index_map = _fold_with_index_map(haystack)
+    pattern = _word_pattern(*(_fold_for_match(w) for w in words))
+    match = re.search(pattern, haystack_folded)
     if not match:
         return haystack.strip()
-    return haystack[:match.start()].strip()
+    # index_map: ver comentário equivalente em text_after_word().
+    return haystack[:index_map[match.start()]].strip()

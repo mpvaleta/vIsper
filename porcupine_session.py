@@ -126,16 +126,30 @@ class PorcupineSession:
                 if closed or hit_cap:
                     text = self._transcribe(dictation_buffer)
                     dictation_buffer = []
-                    # Duas chamadas de propósito, não uma combinada:
-                    # DictationSession.handle() só sabe montar a
-                    # mensagem final a partir do PRÓPRIO buffer
-                    # interno dela (populado por chamadas sem a wake
-                    # word), não do texto passado na chamada que
-                    # fecha. Primeiro alimenta o conteúdo, depois
-                    # fecha com a wake word sozinha — mesmo contrato
-                    # que o loop de mic contínuo já usa hoje.
-                    if text:
-                        self.session.handle(text)
-                    result = self.session.handle(WAKE_WORD)
+                    # UMA chamada só, com a wake word emendada no fim
+                    # do conteúdo.
+                    #
+                    # Isso já foram DUAS chamadas (primeiro o conteúdo,
+                    # depois a wake word sozinha pra fechar) e era um
+                    # bug sério: o áudio da wake word de fechamento
+                    # está DENTRO de dictation_buffer (o frame que
+                    # disparou a detecção entra no buffer antes de ser
+                    # processado), então `text` normalmente JÁ termina
+                    # com a wake word transcrita. Ou seja, a primeira
+                    # chamada já fechava o ditado — e a segunda caía
+                    # numa sessão OCIOSA, onde wake word sozinha
+                    # significa "abre a IA padrão". Resultado: cada
+                    # envio abria uma aba nova do Claude e deixava o
+                    # app presto em modo ditado de novo, sem ninguém
+                    # ter pedido.
+                    #
+                    # DictationSession.handle() já sabe separar
+                    # conteúdo de gatilho dentro do mesmo trecho
+                    # (split_before_any), que é exatamente o formato
+                    # que o loop de mic contínuo entrega quando a
+                    # pessoa emenda a wake word sem pausa — então uma
+                    # chamada só é também o contrato mais parecido com
+                    # o da v1.
+                    result = self.session.handle(f"{text} {WAKE_WORD}".strip())
                     if result and on_result:
                         on_result(result)
