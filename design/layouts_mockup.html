@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>vIsper — Layouts</title>
+<style>
+  :root {
+    --mint-1: #9FDCC0;
+    --mint-2: #5FAE8F;
+    --lavender: #A48FE6;
+    --lavender-dark: #8E76D9;
+    --lavender-light: #CCC0F4;
+    --lavender-pale: #EFEAFB;
+    --teal-accent: #4FC7B8;
+    --status-green: #2FAE5C;
+    --status-green-bg: #E3F6E9;
+    --status-blue: #4E7FE0;
+    --status-amber: #E0A83E;
+    --status-offline: #B5726B;
+    --status-dictate: #E0645A;
+    --status-idle: #9B96A8;
+    --ink: #2B2B2B;
+    --blush: #F4A9A0;
+    --muted: #8A82A6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
+    background: linear-gradient(180deg, #F6F4FB 0%, #ECE7F8 100%);
+    padding: 48px 20px 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 64px;
+  }
+  .section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .section-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }
+
+  /* ---------- mascot (inline, reaproveitado nos dois estados) ---------- */
+  .mascot { display: block; }
+
+  /* ================= DESKTOP ================= */
+  .desktop-frame {
+    width: 340px;
+    filter: drop-shadow(0 24px 46px rgba(90,70,140,0.28));
+  }
+  .menubar-strip {
+    background: rgba(255,255,255,0.75);
+    height: 26px;
+    border-radius: 8px 8px 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 12px;
+    gap: 12px;
+    font-size: 12px;
+    color: #6b6b6b;
+    border-bottom: 1px solid rgba(0,0,0,0.07);
+  }
+  .menubar-visper {
+    width: 18px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(164,143,230,0.18);
+    border-radius: 5px;
+  }
+  .popover {
+    background: #FFFFFF;
+    border-radius: 0 0 14px 14px;
+    padding: 16px;
+  }
+  .popover-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 14px;
+  }
+  .popover-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+  .status-pill {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 6px;
+    background: var(--status-green-bg);
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-size: 12px; font-weight: 600; color: var(--status-green);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--status-green); }
+  .divider { height: 1px; background: rgba(0,0,0,0.06); margin: 4px 0; }
+  .row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 2px;
+    font-size: 13px; color: var(--ink);
+  }
+  .row .row-icon {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: var(--lavender-pale);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  .row .row-main { flex: 1; }
+  .row .row-sub { font-size: 11px; color: var(--muted); }
+  .row .row-status { font-size: 11px; font-weight: 600; color: var(--status-green); }
+  .activity-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--muted);
+    padding: 10px 2px 4px;
+  }
+  .activity-item {
+    padding: 7px 2px;
+    font-size: 12.5px; color: var(--ink);
+  }
+  .activity-item .src { color: var(--lavender-dark); font-weight: 600; }
+  .activity-item .time { color: var(--muted); font-size: 11px; }
+  .popover-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 10px; margin-top: 6px;
+    font-size: 12px; color: var(--muted);
+  }
+  .footer-link { color: var(--muted); }
+
+  /* ================= MOBILE ================= */
+  .phone-frame {
+    width: 292px;
+    height: 610px;
+    background: #14121A;
+    border-radius: 46px;
+    padding: 12px;
+    filter: drop-shadow(0 28px 55px rgba(90,70,140,0.32));
+  }
+  .phone-screen {
+    background: linear-gradient(180deg, var(--mint-1) 0%, var(--mint-2) 100%);
+    border-radius: 36px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .island {
+    width: 90px; height: 24px;
+    background: #0B0B0B;
+    border-radius: 14px;
+    margin: 10px auto 4px;
+  }
+  .status-bar {
+    display: flex; justify-content: space-between;
+    padding: 2px 22px 0;
+    font-size: 12px; font-weight: 600; color: #234036;
+  }
+  .phone-header {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 18px 20px 8px;
+  }
+  .phone-title { font-size: 15px; font-weight: 700; color: #1F3B31; margin-top: 8px; }
+  .connection-card {
+    margin: 6px 20px 0;
+    background: rgba(255,255,255,0.55);
+    border-radius: 14px;
+    padding: 10px 12px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 600; color: #1F3B31;
+  }
+  .trigger-wrap {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px;
+  }
+  .trigger-btn {
+    width: 118px; height: 118px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--lavender-light), var(--lavender) 70%);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 26px rgba(120,95,190,0.45);
+  }
+  .trigger-label { font-size: 12px; font-weight: 600; color: #1F3B31; opacity: 0.85; }
+  .states-strip {
+    margin: 0 20px 10px;
+    background: rgba(255,255,255,0.6);
+    border-radius: 14px;
+    padding: 10px 12px;
+  }
+  .states-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #3E5F52; margin-bottom: 8px;
+  }
+  .states-row { display: flex; justify-content: space-between; }
+  .state-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .state-item span { font-size: 10px; color: #3E5F52; font-weight: 600; }
+  .phone-activity {
+    margin: 0 20px 16px;
+    background: rgba(255,255,255,0.6);
+    border-radius: 14px;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    color: #1F3B31;
+  }
+  .phone-activity .item { padding: 5px 0; }
+  .connection-legend {
+    margin: 6px 20px 0;
+    display: flex; justify-content: space-between;
+    font-size: 10px; font-weight: 600; color: #3E5F52; opacity: 0.75;
+  }
+  .connection-legend span { display: flex; align-items: center; gap: 4px; }
+  .connection-legend .dot { width: 6px; height: 6px; }
+  .rec-badge { animation: pulse-scale 1.3s ease-in-out infinite; }
+  @keyframes pulse-scale {
+    0%, 100% { r: 14; opacity: 1; }
+    50% { r: 16; opacity: 0.7; }
+  }
+  .phone-activity .src { font-weight: 700; }
+  .phone-activity .time { color: #4C6D60; font-size: 10.5px; }
+  .tabbar {
+    display: flex; justify-content: space-around;
+    padding: 10px 0 14px;
+    background: rgba(255,255,255,0.35);
+  }
+  .tab { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 9.5px; color: #3E5F52; font-weight: 600; }
+
+  /* ================= MOTION ================= */
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(79,199,184,0.55); }
+    50% { box-shadow: 0 0 0 5px rgba(79,199,184,0); }
+  }
+  .dot.live { animation: pulse-dot 2s ease-in-out infinite; }
+
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.045); }
+  }
+  .trigger-btn { animation: breathe 2.6s ease-in-out infinite; position: relative; }
+
+  @keyframes ring-out {
+    0% { transform: scale(0.92); opacity: 0.55; }
+    100% { transform: scale(1.55); opacity: 0; }
+  }
+  .trigger-ring {
+    position: absolute; inset: 0; border-radius: 50%;
+    border: 2px solid var(--lavender);
+    animation: ring-out 2.6s ease-out infinite;
+  }
+  .trigger-ring.delay { animation-delay: 1.3s; }
+
+  @keyframes wave-ripple {
+    0%, 100% { opacity: 0.35; transform: scaleX(0.85); }
+    50% { opacity: 1; transform: scaleX(1); }
+  }
+  .wave-path { transform-origin: center; animation: wave-ripple 1.7s ease-in-out infinite; }
+  .wave-path.d2 { animation-delay: 0.18s; }
+  .wave-path.d3 { animation-delay: 0.36s; }
+  .wave-path.d4 { animation-delay: 0.18s; }
+
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .activity-item, .phone-activity .item { animation: fade-in-up 0.5s ease-out both; }
+  .activity-item:nth-of-type(1) { animation-delay: 0.05s; }
+  .activity-item:nth-of-type(2) { animation-delay: 0.18s; }
+  .activity-item:nth-of-type(3) { animation-delay: 0.31s; }
+  .phone-activity .item:nth-of-type(1) { animation-delay: 0.05s; }
+  .phone-activity .item:nth-of-type(2) { animation-delay: 0.18s; }
+
+  @keyframes state-cycle {
+    0%, 18% { opacity: 1; transform: scale(1.18); }
+    25%, 100% { opacity: 0.4; transform: scale(1); }
+  }
+  .state-item:nth-child(1) svg { animation: state-cycle 6s ease-in-out infinite; }
+  .state-item:nth-child(2) svg { animation: state-cycle 6s ease-in-out infinite 1.5s; }
+  .state-item:nth-child(3) svg { animation: state-cycle 6s ease-in-out infinite 3s; }
+  .state-item:nth-child(4) svg { animation: state-cycle 6s ease-in-out infinite 4.5s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot.live, .trigger-btn, .trigger-ring, .wave-path,
+    .activity-item, .phone-activity .item, .state-item svg, .rec-badge {
+      animation: none !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+  <div class="section">
+    <div class="section-label">Desktop — menu bar panel</div>
+    <div class="desktop-frame">
+      <div class="menubar-strip">
+        <svg width="15" height="9" viewBox="0 0 14 10" fill="#6b6b6b"><rect x="0" y="6" width="2.5" height="4" rx="0.5"/><rect x="4" y="4" width="2.5" height="6" rx="0.5"/><rect x="8" y="2" width="2.5" height="8" rx="0.5"/><rect x="11.5" y="0" width="2.5" height="10" rx="0.5" opacity="0.35"/></svg>
+        <svg width="16" height="9" viewBox="0 0 14 8" fill="none" stroke="#6b6b6b"><rect x="0.5" y="0.5" width="11" height="7" rx="1.5"/><rect x="1.5" y="1.5" width="8" height="5" rx="0.5" fill="#6b6b6b" stroke="none"/><rect x="12" y="2.5" width="1.5" height="3" rx="0.5" fill="#6b6b6b" stroke="none"/></svg>
+        <span>Tue 9:41</span>
+        <div class="menubar-visper">
+          <svg width="12" height="12" viewBox="0 0 400 400"><rect x="135" y="175" width="130" height="115" rx="30" fill="#A48FE6"/></svg>
+        </div>
+      </div>
+      <div class="popover">
+        <div class="popover-header">
+          <svg class="mascot" width="40" height="40" viewBox="0 0 400 400">
+            <rect x="163" y="150" width="11" height="42" rx="5.5" fill="#9C86DA"/>
+            <circle cx="168.5" cy="148" r="9" fill="#CCC0F4"/>
+            <rect x="226" y="150" width="11" height="42" rx="5.5" fill="#9C86DA"/>
+            <circle cx="231.5" cy="148" r="9" fill="#CCC0F4"/>
+            <rect x="140" y="188" width="120" height="100" rx="22" fill="#A48FE6"/>
+            <rect x="147" y="193" width="106" height="34" rx="17" fill="#E4DCFA" opacity="0.6"/>
+            <rect x="168" y="222" width="13" height="15" rx="3" fill="#2B2B2B"/>
+            <rect x="216" y="222" width="13" height="15" rx="3" fill="#2B2B2B"/>
+            <path d="M 188 248 Q 200 255 212 248" stroke="#5B4A8A" stroke-width="3" fill="none" stroke-linecap="round"/>
+          </svg>
+          <div class="popover-title">vIsper</div>
+          <div class="status-pill"><span class="dot live"></span>Listening</div>
+        </div>
+        <div class="divider"></div>
+        <div class="row">
+          <div class="row-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8E76D9"><rect x="9" y="2" width="6" height="12" rx="3" fill="#8E76D9" stroke="none"/><path d="M5 11a7 7 0 0 0 14 0" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="18" x2="12" y2="22" stroke-width="2" stroke-linecap="round"/></svg></div>
+          <div class="row-main">DJI Mic (RX)<div class="row-sub">Detected automatically</div></div>
+        </div>
+        <div class="row">
+          <div class="row-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8E76D9"><circle cx="12" cy="19" r="1.6" fill="#8E76D9" stroke="none"/><path d="M8 15a5.5 5.5 0 0 1 8 0" stroke-width="2" stroke-linecap="round"/><path d="M4.5 11.5a11 11 0 0 1 15 0" stroke-width="2" stroke-linecap="round" opacity="0.6"/></svg></div>
+          <div class="row-main">iPhone relay<div class="row-sub">ntfy · from anywhere</div></div>
+          <div class="row-status">Connected</div>
+        </div>
+        <div class="divider"></div>
+        <div class="activity-label">Recent activity</div>
+        <div class="activity-item"><span class="src">Claude</span> — confirm tomorrow's meeting <span class="time">· 2 min ago</span></div>
+        <div class="activity-item"><span class="src">ChatGPT</span> — article summary <span class="time">· 18 min ago · via iPhone</span></div>
+        <div class="activity-item"><span class="src">Claude Code</span> — fix the parser bug <span class="time">· 1h ago</span></div>
+        <div class="divider"></div>
+        <div class="popover-footer">
+          <span class="footer-link"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8A82A6" stroke-width="2" style="vertical-align:-2px"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M22 12h-3M5 12H2M19.07 4.93l-2.12 2.12M7.05 16.95l-2.12 2.12M19.07 19.07l-2.12-2.12M7.05 7.05L4.93 4.93" stroke-linecap="round"/></svg> Settings</span>
+          <span class="footer-link">Quit</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Mobile — iPhone app</div>
+    <div class="phone-frame">
+      <div class="phone-screen">
+        <div class="island"></div>
+        <div class="status-bar">
+          <span>9:41</span>
+          <span style="display:flex; align-items:center; gap:4px;">
+            <svg width="15" height="9" viewBox="0 0 14 10" fill="#234036"><rect x="0" y="6" width="2.5" height="4" rx="0.5"/><rect x="4" y="4" width="2.5" height="6" rx="0.5"/><rect x="8" y="2" width="2.5" height="8" rx="0.5"/><rect x="11.5" y="0" width="2.5" height="10" rx="0.5" opacity="0.35"/></svg>
+            <svg width="16" height="9" viewBox="0 0 14 8" fill="none" stroke="#234036"><rect x="0.5" y="0.5" width="11" height="7" rx="1.5"/><rect x="1.5" y="1.5" width="8" height="5" rx="0.5" fill="#234036" stroke="none"/><rect x="12" y="2.5" width="1.5" height="3" rx="0.5" fill="#234036" stroke="none"/></svg>
+          </span>
+        </div>
+
+        <div class="phone-header">
+          <svg class="mascot" width="64" height="64" viewBox="0 0 400 400">
+            <path class="wave-path d1" d="M 285 165 Q 298 185 285 205" stroke="#2FAE5C" stroke-width="9" fill="none" stroke-linecap="round"/>
+            <path class="wave-path d2" d="M 300 152 Q 322 185 300 218" stroke="#2FAE5C" stroke-width="9" fill="none" stroke-linecap="round" opacity="0.75"/>
+            <path class="wave-path d3" d="M 118 165 Q 105 185 118 205" stroke="#2FAE5C" stroke-width="9" fill="none" stroke-linecap="round"/>
+            <path class="wave-path d4" d="M 103 152 Q 81 185 103 218" stroke="#2FAE5C" stroke-width="9" fill="none" stroke-linecap="round" opacity="0.75"/>
+            <rect x="163" y="150" width="11" height="42" rx="5.5" fill="#9C86DA"/>
+            <circle cx="168.5" cy="148" r="9" fill="#CCC0F4"/>
+            <rect x="226" y="150" width="11" height="42" rx="5.5" fill="#9C86DA"/>
+            <circle cx="231.5" cy="148" r="9" fill="#CCC0F4"/>
+            <rect x="140" y="188" width="120" height="100" rx="22" fill="#A48FE6"/>
+            <rect x="147" y="193" width="106" height="34" rx="17" fill="#E4DCFA" opacity="0.6"/>
+            <circle cx="174.5" cy="230" r="8" fill="#2B2B2B"/>
+            <circle cx="222.5" cy="230" r="8" fill="#2B2B2B"/>
+            <ellipse cx="200" cy="253" rx="10" ry="6" fill="#5B4A8A"/>
+          </svg>
+          <div class="phone-title">vIsper</div>
+        </div>
+
+        <div class="trigger-wrap">
+          <div class="trigger-btn">
+            <div class="trigger-ring"></div>
+            <div class="trigger-ring delay"></div>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style="position:relative">
+              <rect x="9" y="2" width="6" height="12" rx="3" fill="#4A3B7A"/>
+              <path d="M5 11a7 7 0 0 0 14 0" stroke="#4A3B7A" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <line x1="12" y1="18" x2="12" y2="22" stroke="#4A3B7A" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="trigger-label">Tap and hold to talk</div>
+        </div>
+
+        <div class="states-strip">
+          <div class="states-label">vIsper states</div>
+          <div class="states-row">
+            <div class="state-item">
+              <svg width="30" height="30" viewBox="0 0 400 400">
+                <rect x="140" y="188" width="120" height="100" rx="22" fill="#B9B3C9"/>
+                <rect x="168" y="222" width="13" height="15" rx="3" fill="#2B2B2B"/>
+                <rect x="216" y="222" width="13" height="15" rx="3" fill="#2B2B2B"/>
+                <path d="M 188 248 Q 200 253 212 248" stroke="#5B4A8A" stroke-width="3" fill="none" stroke-linecap="round"/>
+              </svg>
+              <span>Idle</span>
+            </div>
+            <div class="state-item">
+              <svg width="30" height="30" viewBox="0 0 400 400">
+                <rect x="140" y="188" width="120" height="100" rx="22" fill="#A48FE6"/>
+                <circle cx="174.5" cy="230" r="8" fill="#2B2B2B"/>
+                <circle cx="222.5" cy="230" r="8" fill="#2B2B2B"/>
+                <ellipse cx="200" cy="253" rx="9" ry="5" fill="#5B4A8A"/>
+                <path d="M 278 205 Q 288 218 278 231" stroke="#2FAE5C" stroke-width="7" fill="none" stroke-linecap="round"/>
+              </svg>
+              <span>Listening</span>
+            </div>
+            <div class="state-item">
+              <svg width="30" height="30" viewBox="0 0 400 400">
+                <rect x="140" y="188" width="120" height="100" rx="22" fill="#A48FE6"/>
+                <circle cx="174.5" cy="230" r="8" fill="#2B2B2B"/>
+                <circle cx="222.5" cy="230" r="8" fill="#2B2B2B"/>
+                <ellipse cx="200" cy="256" rx="7" ry="9" fill="#5B4A8A"/>
+                <circle class="rec-badge" cx="253" cy="195" r="15" fill="#E0645A"/>
+              </svg>
+              <span>Dictating</span>
+            </div>
+            <div class="state-item">
+              <svg width="30" height="30" viewBox="0 0 400 400">
+                <rect x="140" y="188" width="120" height="100" rx="22" fill="#A48FE6"/>
+                <path d="M 165 228 L 178 240 L 200 214" stroke="#4E7FE0" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M 205 232 Q 218 238 231 228" stroke="#5B4A8A" stroke-width="3" fill="none" stroke-linecap="round"/>
+              </svg>
+              <span>Sent</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="connection-card">
+          <span class="dot live" style="background:#2FAE5C"></span>
+          Connected to Valeta's Mac
+        </div>
+        <div class="connection-legend">
+          <span><span class="dot" style="background:#E0A83E"></span>Connecting</span>
+          <span><span class="dot" style="background:#2FAE5C"></span>Connected</span>
+          <span><span class="dot" style="background:#B5726B"></span>Offline</span>
+        </div>
+
+        <div class="phone-activity">
+          <div class="item"><span class="src">Claude</span> — confirm the meeting <span class="time">· 2 min ago</span></div>
+          <div class="item"><span class="src">ChatGPT</span> — article summary <span class="time">· just now, from here</span></div>
+        </div>
+
+        <div class="tabbar">
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="#3E5F52"><path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg><span>Home</span></div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#3E5F52" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round"/></svg><span>History</span></div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#3E5F52" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M22 12h-3M5 12H2M19.07 4.93l-2.12 2.12M7.05 16.95l-2.12 2.12M19.07 19.07l-2.12-2.12M7.05 7.05L4.93 4.93" stroke-linecap="round"/></svg><span>Settings</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

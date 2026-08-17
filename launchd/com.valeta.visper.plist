@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.valeta.visper.plist — LaunchAgent que inicia o vIsper sozinho no
+  login, sem precisar abrir Terminal. Ver "Deixar rodando sozinho" no
+  README.md pro passo a passo completo (venv, instalar, testar,
+  desinstalar). NUNCA TESTADO NUM MAC DE VERDADE — mesma honestidade
+  do resto do projeto: escrito contra a documentação real do formato
+  launchd.plist, não de memória vaga, mas sem jeito de confirmar sem
+  rodar num Mac.
+
+  ANTES DE USAR: troque TODAS as 4 ocorrências de
+  TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER abaixo pelo caminho absoluto
+  de verdade da pasta onde o vIsper está (ex.: /Users/valeta/vIsper) —
+  precisa ser o MESMO caminho usado ao criar o venv (ver README).
+-->
+<plist version="1.0">
+<dict>
+    <!-- Identificador único — por convenção, tem que bater com o nome
+         do arquivo (sem .plist) quando instalado em
+         ~/Library/LaunchAgents/. -->
+    <key>Label</key>
+    <string>com.valeta.visper</string>
+
+    <!-- Interpreter do VENV (não o python3 do sistema/Homebrew) +
+         script. Usar o mesmo interpreter do venv que você já testou
+         manualmente (python3 main.py) é importante: as permissões de
+         microfone/Automação/Acessibilidade do macOS são concedidas
+         por BINÁRIO específico — trocar de interpreter aqui faria o
+         macOS pedir tudo de novo, silenciosamente, sem Terminal
+         aberto pra você notar o prompt. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER/venv/bin/python3</string>
+        <string>TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER/main.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER</string>
+
+    <!-- Inicia sozinho no login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Reinicia sozinho se CRASHAR (saída != 0) — mas NÃO reabre se
+         você mesma clicar "Sair" no menu (saída == 0, nesse caso é
+         saída deliberada, reabrir sozinho seria o oposto do que você
+         pediu). É por isso que é um dict com SuccessfulExit, não só
+         <true/> (que reabriria sempre, até depois de "Sair"). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Sem Terminal aberto, print()/traceback teriam pra onde ir —
+         checar esses arquivos é o primeiro passo se o ícone não
+         aparecer na barra de menu depois do login. -->
+    <key>StandardOutPath</key>
+    <string>TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER/visper.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER/visper.err.log</string>
+
+    <!-- Sinaliza pro macOS que isso é um app com interface (barra de
+         menu), não um processo de fundo puro — afeta prioridade/App
+         Nap. Certo pra esse caso, não pra um daemon sem UI. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!-- Garante UTF-8 mesmo sem shell interativo (LaunchAgent não lê
+         .zshrc/.bash_profile) — importante pro ditado em português
+         (acentos) não quebrar por causa de locale ASCII por padrão. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+        <key>LC_ALL</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+</dict>
+</plist>

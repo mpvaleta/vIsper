@@ -1,0 +1,453 @@
+# vIsper — contexto do projeto
+
+Este arquivo é lido automaticamente pelo Claude Code ao abrir esta
+pasta. Ele existe pra você não precisar reconstruir o contexto do
+zero — leia isso inteiro antes de mexer em qualquer coisa.
+
+## O que é o vIsper
+
+vIsper é um launcher ativado por voz pra IAs de chat (Claude, Claude
+Code, ChatGPT, Perplexity, Gemini), pensado pra ser usado sem
+encostar no teclado — a Valeta fala, o app abre a IA certa, escuta o
+que ela dita, e manda pro chat sozinho.
+
+Fluxo completo:
+1. Ela fala a wake word (padrão: "vIsper") + o nome de uma IA — ex:
+   "vIsper, claude". Isso abre o chat daquela IA.
+2. Só a wake word sozinha, sem nome de IA reconhecível depois, abre a
+   IA padrão (`config.DEFAULT_AI`).
+3. A partir daí, tudo que ela falar é acumulado como ditado.
+4. Quando ela fala a wake word de novo (mais qualquer palavra depois
+   dela, não precisa ser uma frase específica tipo "terminei") — o
+   texto acumulado é colado no campo de chat e o Enter é apertado
+   sozinho ("manda ver").
+
+Duas superfícies, ligadas uma à outra:
+- **Mac** (`main.py` + módulos): app de barra de menu (rumps) que
+  escuta o microfone, roda tudo isso, e executa a automação de
+  verdade (abrir apps, colar texto, apertar Enter via AppleScript/
+  System Events).
+- **iPhone** (`ios/`): não repete a automação sozinho — só *aciona* o
+  Mac remotamente (o porquê está em "Decisões de arquitetura" abaixo).
+  Pensado pro caso de uso real de disparar um comando estando longe
+  de casa, ex. durante o treino.
+
+Entrada de áudio no Mac: qualquer microfone que o macOS reconheça.
+Dois jeitos já detectados automaticamente, em ordem de prioridade via
+`config.PREFERRED_INPUT_DEVICES` — DJI Mic (USB, não precisa do app
+da DJI) e fone Bluetooth (a Valeta usa Sony WH-1000XM5; WF-1000XM5
+também reconhecido) — mais qualquer outro escolhido manualmente no
+menu. Ver "Sobre usar fone de ouvido" no README pro aviso de
+qualidade de áudio ao usar Bluetooth (efeito colateral do protocolo,
+não bug daqui).
+
+## Decisões de arquitetura já tomadas (não revisitar sem motivo forte)
+
+- **Automação via AppleScript/System Events** (clipboard + Cmd+V
+  simulado + Enter simulado), controlando o navegador/apps já
+  instalados — em vez de um cliente de chat nativo multi-provedor via
+  API. Motivo: zero custo extra (reaproveita as assinaturas que já
+  existem) e o mínimo de atrito possível — as duas prioridades de
+  qualquer decisão de arquitetura neste projeto. Confirmado por
+  pesquisa: nenhum produto de chat de IA aceita áudio bruto direto
+  via API/web, sempre precisa transcrever pra texto primeiro — o que
+  o pipeline Whisper já faz de qualquer forma.
+- Prioridade de correspondência de trigger de IA: o apelido mais
+  longo primeiro (`command_router.py`) — evita "claude" casar como
+  substring de "claude code" antes de "claude code" ter a chance de
+  ganhar. Já foi um bug real, corrigido.
+- **iPhone precisa ser um app separado que aciona o Mac, não que
+  repete a automação sozinho** — iOS não deixa um app simular teclado
+  dentro de outro app (sandbox). Não existe "AppleScript do iOS".
+- **Relay via `ntfy` em vez de servidor só-na-rede-local** — a Valeta
+  quer usar o iPhone mesmo fora da Wi-Fi de casa (ex. no treino). Um
+  servidor só na rede local do Mac fica inalcançável assim que o
+  iPhone troca de rede, não importa se o app já estava aberto antes
+  de sair. `ntfy` é grátis, open-source, e funciona de qualquer lugar
+  com internet — o Mac fica inscrito num tópico privado, o iPhone
+  publica nesse tópico de onde estiver. **Segurança**: tópicos do
+  ntfy.sh são públicos por padrão (sem senha) — o nome do tópico
+  PRECISA ser uma string longa e aleatória, nunca algo óbvio, porque
+  isso aciona automação de verdade no Mac.
+- **Porcupine pra wake-word acústica, com arquitetura própria pra
+  evitar dois motores pesados concorrentes.** A v1 (ainda o padrão)
+  transcreve tudo continuamente com Whisper e procura a wake word no
+  texto — funciona, mas gasta mais CPU e tem mais falso positivo/
+  negativo. A tentativa óbvia de integrar o Porcupine (rodar ele E o
+  Whisper contínuo ao mesmo tempo o tempo todo) foi propositalmente
+  EVITADA por ser arriscada demais pra escrever sem hardware real pra
+  testar. Em vez disso, `porcupine_session.py` alterna entre "só
+  Porcupine" (ocioso, barato, frames pequenos) e "acumula áudio bruto
+  + Porcupine no mesmo loop" (ditando) — só transcreve de verdade nos
+  dois momentos que precisa (nome da IA logo após abrir; conteúdo
+  completo no fechamento). Isso evita concorrência real sem abrir mão
+  do ganho principal do Porcupine.
+- **UI do produto em inglês.** Comentário de código e documentação
+  deste projeto continuam em português (é como a Valeta se comunica
+  aqui), mas qualquer texto que apareça DE VERDADE na interface do
+  app (labels, botões, status) deve ser em inglês — pedido explícito
+  dela, ver `design/layouts_mockup.html` como referência de como isso
+  fica.
+- **Cor de marca separada de cor de status.** Lavanda/mint são cores
+  de MARCA (mascote, botões, fundo) — não usar pra comunicar estado.
+  Estados usam uma paleta semântica própria: cinza (Idle), verde
+  (Listening/Connected), âmbar (Connecting), vermelho-coral
+  (Dictating), azul (Sent), terracota (Offline). Ver
+  `design/layouts_mockup.html` pros valores hex exatos.
+- **Detecção de microfone por lista de prioridade, não hardcoded pra
+  uma marca só** (`config.PREFERRED_INPUT_DEVICES`, usado por
+  `audio_input.guess_preferred_device()`). Cada grupo é
+  `{"keywords": [...], "bluetooth": bool}`; o primeiro grupo que bater
+  com um dispositivo conectado ganha. DJI Mic vem antes do fone
+  Bluetooth de propósito — mic dedicado, sem o efeito colateral de
+  qualidade abaixo. A flag `bluetooth` é o que decide se o aviso de
+  qualidade aparece, então generaliza pra qualquer fone que a Valeta
+  adicionar depois, não só o Sony XM5 de hoje. **Não voltar a
+  hardcodar detecção pra um dispositivo só** — o padrão de lista
+  existe justamente pra próximo mic/fone ser uma linha em
+  `config.py`, não uma mudança de código.
+- **Qualidade de áudio do sistema cai (mono, perfil HFP/HSP) enquanto
+  o mic de um fone Bluetooth estiver em uso — aceito como custo
+  conhecido, não um bug a "consertar".** É como o Bluetooth clássico
+  funciona (troca de perfil A2DP↔HFP é decisão do SO, não controlável
+  pelo app); a única mitigação real seria não manter o stream de
+  entrada aberto o tempo todo, o que hoje conflita com o modo Whisper
+  contínuo (que precisa escutar sem parar pra pegar a wake word). O
+  vIsper só avisa (notificação, uma vez por sessão de escuta) — ver
+  README pro texto exato do aviso.
+- **Vocabulário de fechamento: "câmbio" (PT) / "over" (EN), além da
+  wake word.** Analisei palavras candidatas pelos dois critérios que
+  importam: soam naturais pro que fazem, E são raras o bastante em
+  fala natural pra não disparar por acidente no meio de um ditado
+  comprido. Palavras óbvias tipo "manda"/"send", "pronto"/"done",
+  "beleza" foram descartadas por serem comuns demais no dia a dia —
+  arriscam fechar cedo se aparecerem organicamente na frase que você
+  está ditando. "câmbio"/"over" vêm do vocabulário de comunicação por
+  rádio ("terminei de falar, sua vez") — o sentido bate exatamente
+  com a ação, e nenhum dos dois é uma palavra do dia a dia. Isso só
+  funciona bem porque o casamento é por PALAVRA INTEIRA
+  (`text_utils.py`, `contains_word()`), não substring — sem isso,
+  "over" casaria dentro de "however"/"moreover"/"discover"/"cover",
+  que são comuns em qualquer ditado em inglês. `text_utils.py`
+  também dobra acento (câmbio/cambio contam igual), pra tolerar o
+  Whisper transcrever com ou sem acento.
+
+## Estado atual do código
+
+Todo o código Python foi escrito e testado neste ambiente (sandbox
+Linux, sem Mac, sem mic, sem Xcode) — **nada rodou numa máquina real
+ainda**. "Testado" abaixo sempre quer dizer testes unitários com
+tudo que precisa de hardware real simulado (mocks). Isso não
+substitui testar de verdade — é só o que dava pra garantir sem
+hardware.
+
+Módulos principais (mic local, sempre ativos):
+- `config.py` — wake word, IA padrão, apelidos de cada IA, palavras
+  de fechamento (`CLOSE_TRIGGERS`), dispositivos de entrada preferidos
+  (`PREFERRED_INPUT_DEVICES` — DJI Mic, Sony XM5), tópico do ntfy,
+  chaves do Porcupine. É o arquivo que se edita pra ajustar
+  comportamento sem mexer no resto.
+- `text_utils.py` — comparação de texto compartilhada entre
+  `command_router.py` e `dictation.py`: casa por PALAVRA INTEIRA (não
+  substring) e ignora acento. Existe especificamente porque "over"
+  (um dos `CLOSE_TRIGGERS`) casaria dentro de "however"/"discover" se
+  fosse substring simples. Duas famílias de função, com contratos BEM
+  diferentes de propósito:
+  - `split_after_word()` — resultado NUNCA é mostrado a ninguém, só
+    comparado contra outro gatilho depois. Apara pontuação nas bordas
+    (não só espaço) — sem isso, "vIsper." (Whisper adiciona ponto
+    final com frequência) não abria a IA padrão, porque "." sobrava
+    como se fosse conteúdo depois da wake word.
+  - `split_before_any()`/`text_after_word()` — resultado PODE virar
+    conteúdo real colado no chat, então preservam capitalização/
+    acento/pontuação REAL do original (ao contrário da família
+    acima). **Cuidado que já mordeu uma vez**: a primeira versão de
+    `split_before_any()` reusava a mesma lista de caracteres de borda
+    de `split_after_word()` (espaço + pontuação) — isso apagava "!"/
+    "?"/"." de VERDADE no fim de frases reais ditadas. Corrigido pra
+    aparar só espaço nas bordas. `text_after_word()` tem uma
+    assimetria de propósito: apara pontuação da borda ESQUERDA (logo
+    depois da palavra-gatilho, tipo "claude," — sempre artefato de
+    como a palavra foi dita) mas só espaço da borda DIREITA (pode ser
+    fim de frase real, tipo "...tempo hoje?"). 27 testes.
+- `audio_input.py` — lista/detecta microfones (`guess_preferred_device()`,
+  `classify_device()`, orientados por `config.PREFERRED_INPUT_DEVICES` —
+  casamento por SUBSTRING simples, não palavra inteira, porque nome de
+  hardware não é fala) e captura áudio em dois formatos diferentes:
+  `chunks()` (blocos de segundos, float32, pro Whisper) e
+  `raw_frames()` (frames pequenos e fixos, int16, pro Porcupine).
+  `resolve_device_by_name()` existe pra re-resolver uma escolha MANUAL
+  pelo nome a cada uso, em vez de confiar num índice guardado — índice
+  do sounddevice é posicional, não estável (pode reindexar quando
+  outro dispositivo conecta/desconecta). `load_saved_device_name()`/
+  `save_device_choice()` persistem essa escolha manual entre execuções
+  em `~/Library/Application Support/vIsper/device.json` (só o NOME,
+  nunca índice) — falha ao ler/escrever (disco cheio, corrompido etc.)
+  é engolida de propósito, isso é conveniência, não deve impedir o app
+  de funcionar. `label_devices()` desambigua o RÓTULO exibido no
+  submenu quando dois dispositivos têm o MESMO nome (rumps indexa
+  submenu por título — sem isso o segundo simplesmente sumia do menu);
+  seleção/persistência continuam usando o nome puro, não o rótulo
+  (limitação aceita pro caso de dois dispositivos IDÊNTICOS, ver
+  "Limitações conhecidas"). 28 testes (`test_audio_input.py`) — cobrem
+  detecção por nome (mockando `sd.query_devices()`) e persistência
+  (apontando `DEVICE_STATE_PATH` pra um diretório temporário, nunca o
+  real); nunca abre stream de verdade. Arquivo de teste cai pra um
+  dublê de `sounddevice` se a lib nativa PortAudio não estiver
+  instalada, pra rodar em qualquer sandbox.
+- `command_router.py` — decide qual IA abrir a partir do texto
+  transcrito, usando `text_utils.py`. `route()` retorna
+  `(nome_da_ia, leftover)`, não só o nome — `leftover` é o que sobrou
+  depois do nome da IA (ou "" se foi só a wake word, abrindo
+  DEFAULT_AI), com capitalização/acento/pontuação REAL preservados
+  (`text_utils.text_after_word()`) — resgata conteúdo dito na MESMA
+  respiração que o comando de abrir (ex.: "vIsper claude qual é a
+  previsão do tempo" tudo de uma vez, sem pausa), simétrico à correção
+  equivalente já feita do lado do FECHAMENTO em `dictation.py`. Mudar
+  esse contrato (de string solta pra tupla) exigiu atualizar os 7
+  testes já existentes — mecânico, mas intencional: quem chamar
+  `route()` de algum lugar novo precisa desempacotar a tupla, não
+  tratar o retorno como string. 11 testes dedicados.
+- `dictation.py` — a máquina de estados ocioso/ditando. Fecha com a
+  wake word OU qualquer `CLOSE_TRIGGERS`. A mensagem final é o BUFFER
+  INTERNO (populado por chamadas anteriores de `.handle()`) **mais**
+  qualquer conteúdo que veio ANTES do gatilho de fechamento no MESMO
+  trecho que fechou (`text_utils.split_before_any()`) **mais**
+  qualquer conteúdo que veio DEPOIS do nome da IA no MESMO trecho que
+  abriu (`command_router.route()`'s `leftover`) — as duas pontas
+  corrigidas depois que testes concretos mostraram que "terminar/
+  começar a frase colado com o gatilho, sem pausa" descartava conteúdo
+  de verdade em qualquer uma das duas. Ao integrar qualquer fonte de
+  áudio nova, o que importa lembrar agora é que o texto da chamada que
+  ABRE e o texto da chamada que FECHA podem os dois ter conteúdo real
+  misturado com o gatilho, não só as chamadas do meio. `DictationSession`
+  aceita `on_open`/`on_send` opcionais (callbacks sem argumento, só
+  feedback — não afetam a máquina de estados; `on_send` NÃO dispara no
+  caso "cancelado"), usados por `main.py` pra tocar o earcon. 19
+  testes dedicados.
+- `actions.py` — as ações de verdade (abrir app/URL, colar texto,
+  apertar Enter) via `subprocess`/`osascript`. Todo `subprocess.run()`
+  usa `check=True` — antes, uma falha (ex.: permissão de
+  Acessibilidade ainda não concedida) fazia a ação simplesmente NÃO
+  FAZER NADA, sem erro, sem log, sem jeito de saber o que aconteceu.
+  Agora vira `CalledProcessError`, capturado por
+  `main._listen_loop_safe` e avisado por notificação. `play_sound()` é
+  a exceção de propósito: usa `Popen` (não-blocking) e ENGOLE falha —
+  é earcon (`config.DICTATION_OPEN_SOUND`/`DICTATION_SEND_SOUND`), não
+  pode travar o loop de ditado nem parecer que a ação real falhou. 12
+  testes (`test_actions.py`, mockando `subprocess.run`/`Popen` —
+  primeira cobertura deste arquivo).
+- `main.py` — o app de barra de menu (rumps). Escolhe automaticamente
+  entre dois caminhos de escuta: Whisper contínuo (padrão) ou
+  Porcupine (`_listen_loop_porcupine`, só ativa com as duas chaves de
+  Porcupine configuradas — **essa junção com hardware real nunca foi
+  testada**, só a lógica de estados isolada). Submenu "Escolher
+  microfone" agora é funcional de verdade (era só um alerta
+  informativo antes): lista os dispositivos atuais (rótulo já
+  desambiguado por `audio_input.label_devices()` se dois tiverem o
+  mesmo nome), clicar num deles fixa a escolha manual E salva
+  (`audio_input.save_device_choice()`, sobrevive a reiniciar o app),
+  "Detectar automaticamente" volta a deixar `guess_preferred_device()`
+  decidir a cada "Iniciar escuta" E esquece a escolha salva. Checkmark
+  do submenu compara por NOME, não
+  índice — importante pra mostrar certo logo no primeiro
+  `_rebuild_mic_menu()` do `__init__`, antes de qualquer índice ter
+  sido resolvido de verdade. Thread de escuta envolvida em try/except
+  (`_listen_loop_safe`) — sem isso, stream falhando ao abrir (ex.:
+  fone Bluetooth desconectou) travava `self.listening=True` pra
+  sempre, exigindo reiniciar o app. **A API do rumps usada aqui
+  (`MenuItem.clear()/.add()`, `.state`, `.title` mutável) foi
+  conferida linha a linha contra o source real do pacote (baixado da
+  PyPI, versão 0.4.0 — a mesma do `requirements.txt`), não escrita de
+  memória** — mas a integração com o AppKit/NSMenu de verdade continua
+  **nunca testada numa máquina real**, mesmo padrão de honestidade do
+  resto deste arquivo.
+
+Módulos de entrada alternativa (compartilham o mesmo
+`DictationSession`, então "abrir pelo Mac", "abrir pelo iPhone" e
+"abrir por um arquivo de áudio" nunca ficam em estados diferentes):
+- `relay_listener.py` — escuta o tópico ntfy, alimenta o
+  `DictationSession`. Já plugado em `main.py`. Backoff exponencial no
+  reconnect (5s→10s→20s...até 60s, reseta ao reconectar). **Nunca
+  testado contra o ntfy.sh de verdade** — o parsing foi conferido
+  contra a documentação oficial do formato JSON deles, mas não contra
+  uma conexão real.
+- `wake_word_porcupine.py` — wrapper do motor Porcupine. Escrito
+  contra a API real do pacote `pvporcupine` (conferida, não foi de
+  memória). Não dá pra testar detecção de verdade sem AccessKey +
+  arquivo `.ppn` reais.
+- `porcupine_session.py` — a orquestração ocioso/ditando descrita
+  acima. Já ligado em `main.py`.
+- `audio_file_input.py` — transcreve um arquivo de áudio (voice notes
+  etc.) ou vigia uma pasta. **Ainda não plugado em `main.py`** — sem
+  menu nem forma de escolher a pasta ainda.
+
+Ferramentas de apoio:
+- `doctor.py` — confere a config antes de rodar (dependências
+  instaladas, dispositivo de entrada preferido detectável agora,
+  tópico do ntfy não é óbvio/curto, Porcupine com as duas chaves ou
+  nenhuma, `DEFAULT_AI` existe em `AI_TRIGGERS`). O check de
+  dispositivo (`check_input_device()`) é só informativo — nunca conta
+  como problema, porque não ter o mic ligado/pareado na hora de rodar
+  `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
+  `python3 main.py`.
+- `test_*.py` — 124 testes no total. Rodar com:
+  `python3 -m unittest discover -p "test_*.py"`
+
+iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
+publica no tópico ntfy quando disparado pela Siri/Atalhos/Botão de
+Ação. **Nunca compilado, nunca aberto no Xcode** (ainda sem toolchain
+Swift em nenhum ambiente Claude Code usado até agora — nem esta
+sessão) — precisa criar um projeto Xcode novo, colar o arquivo
+dentro, e validar do zero. Revisado com atenção mesmo sem poder
+compilar: a lógica HTTP (POST sem `Content-Type`, corpo = texto puro,
+sucesso = status 200) bate com a documentação pública do ntfy, mas
+**tentei confirmar contra o ntfy.sh de verdade e não consegui — o
+proxy de saída deste sandbox bloqueia ntfy.sh por política de egress
+("connect_rejected" no proxy, não é limitação do código). Isso não é
+específico desta sessão: nenhum ambiente Claude Code com esse tipo de
+proxy vai conseguir validar isso — só dá pra confirmar rodando na
+rede/Mac da Valeta mesmo.** Um achado concreto da revisão: nenhuma das
+duas frases originais da Siri (`VisperShortcuts.appShortcuts`)
+capturava o parâmetro `command` (faltava `\(\.$command)` embutido na
+frase) — acrescentada uma terceira frase que captura explicitamente,
+como caminho mais garantido; as três continuam sem testar de verdade
+(precisa de Xcode). Ver comentários no topo do arquivo pro checklist
+atualizado.
+
+LaunchAgent (`launchd/com.valeta.visper.plist`) — inicia o vIsper
+sozinho no login, sem Terminal aberto (ver "Deixar rodando sozinho"
+no README pro passo a passo). Reinicia sozinho se crashar
+(`KeepAlive`/`SuccessfulExit: false`), mas NÃO reabre depois de "Sair"
+deliberado no menu — distinção que importa (`<true/>` sem o dict
+reabriria sempre, inclusive depois de "Sair", o oposto do que faz
+sentido). Assume um venv dedicado dentro da pasta do vIsper (agora
+recomendado desde a Instalação no README, não só pro LaunchAgent) —
+motivo: permissões do macOS (mic/Automação/Acessibilidade) são
+concedidas por BINÁRIO específico, então usar o MESMO interpreter pra
+teste manual e pro LaunchAgent evita ter que conceder tudo de novo.
+**NUNCA TESTADO NUM MAC DE VERDADE** — o XML foi validado com
+`plistlib` (Python, parser estrito — confirma que está bem formado e
+que as chaves batem com o que eu pretendia), mas nenhum `launchctl`
+de verdade carregou isso ainda; primeira coisa a conferir é se o
+ícone aparece na barra de menu depois do login, e os logs
+(`visper.out.log`/`visper.err.log`, na pasta do vIsper) se não
+aparecer.
+
+Design (`design/`):
+- `mascot_concept_v1.svg` — mascote colorido (lavanda), com preview
+  em PNG. Conceito: "antena de som" no lugar de orelha de bicho,
+  ancorado na função do produto (voz/escuta) em vez de um animal
+  aleatório.
+- `menubar_icon_template.svg` — versão monocromática/silhueta, pro
+  ícone real da barra de menu do Mac (convenção da Apple: glifo
+  simples, não arte colorida, pra funcionar em modo claro/escuro).
+- `layouts_mockup.html` — mockup animado dos dois layouts (painel da
+  barra de menu + app do iPhone), com a paleta de status completa (7
+  cores, ver acima) e texto de produto em inglês. Tem prefers-
+  reduced-motion respeitado.
+- `DESIGN.md` — notas de paleta/estilo. **Desatualizado**: ainda não
+  reflete a paleta de status expandida (só documentação, não afeta
+  funcionamento).
+
+Nenhum dos conceitos de design foi reagido pela Valeta ainda — pode
+mudar bastante antes de virar assets de produção.
+
+## Limitações conhecidas
+
+1. Sem UI de configuração — tudo se ajusta editando `config.py`
+   direto.
+2. Tópico do ntfy é hardcoded no rascunho do Swift
+   (`TROQUE_AQUI_PELO_MESMO_TOPICO_DO_MAC`) — precisa de um jeito
+   melhor (tela de config no app, ou Keychain) antes de distribuir de
+   verdade.
+3. `_listen_loop_porcupine` em `main.py` nunca rodou numa máquina
+   real — é a parte menos validada do projeto inteiro.
+4. `audio_file_input.py` existe mas não está plugado em `main.py`.
+5. Submenu dinâmico do rumps (`MenuItem.clear()`/`.add()`, `.state`,
+   `.title`) nunca rodou contra o AppKit de verdade — a API foi
+   conferida contra o source do pacote (não só documentação/memória),
+   mas isso não substitui ver o menu abrir na barra de verdade. O
+   mesmo vale pra `afplay` (earcon) e pra ler/escrever
+   `~/Library/Application Support/vIsper/device.json` (persistência de
+   escolha manual) — a LÓGICA tem teste (mockando `subprocess.Popen`/
+   apontando pra um diretório temporário), mas nenhum dos dois tocou
+   um Mac de verdade ainda.
+6. Se DOIS dispositivos de entrada tiverem o MESMO nome (raro, mas
+   possível), o submenu "Escolher microfone" mostra os dois com rótulo
+   desambiguado por índice (`audio_input.label_devices()`) — mas
+   seleção/persistência continuam pelo NOME puro (não o rótulo), então
+   nesse caso raro escolher "um dos dois" e escolher "o outro" ainda
+   resolvem pro mesmo nome salvo. Distinguir os dois de verdade
+   exigiria persistir mais que o nome — não vale a complexidade pra um
+   cenário tão raro.
+7. `launchd/com.valeta.visper.plist` (início automático no login)
+   nunca foi carregado por um `launchctl` de verdade — só validado
+   como XML bem formado (`plistlib`). Ver "Próximos passos" #2.
+
+## Próximos passos, em ordem de prioridade
+
+1. Rodar e testar o app do Mac de verdade (permissões de microfone e
+   de Acessibilidade — ver README) — nada abaixo importa se essa base
+   não estiver validada primeiro. Testar os dois caminhos de escuta
+   (Whisper contínuo é o padrão; Porcupine só ativa com as duas
+   chaves configuradas), e os dois dispositivos de entrada (DJI Mic e
+   o Sony XM5 da Valeta) — auto-detecção E escolha manual pelo
+   submenu. Prestar atenção especial ao aviso de qualidade Bluetooth
+   (ver README) — confirmar que aparece e que o áudio do sistema
+   realmente degrada como esperado, já que isso nunca foi ouvido de
+   verdade, só deduzido de como o Bluetooth clássico funciona. Testar
+   também: os earcons tocando nos momentos certos (abrir/mandar, não
+   ao cancelar), e a persistência de escolha manual sobrevivendo a um
+   `python3 main.py` novo (escolher o Sony, fechar o app, abrir de
+   novo, conferir que já veio marcado sem precisar escolher de novo).
+2. Depois do item 1 validado manualmente por uns dias: configurar o
+   LaunchAgent (`launchd/com.valeta.visper.plist`, ver README) —
+   confirmar que o ícone aparece sozinho no login, que "Sair" não
+   reabre sozinho, e que crashar de verdade (força bruta: `kill -9`
+   no processo) reabre.
+3. Testar `relay_listener.py` contra o ntfy.sh real (`curl -d "vIsper
+   claude teste" https://ntfy.sh/SEU_TOPICO` e confirmar que chega) —
+   só dá pra fazer no Mac/rede da Valeta mesmo, sandboxes de Claude
+   Code com proxy de saída restrito (como o usado nas últimas rodadas
+   deste projeto) não conseguem alcançar ntfy.sh pra validar isso.
+4. Se for usar Porcupine: conseguir AccessKey + arquivo `.ppn`
+   (console.picovoice.ai) e testar `_listen_loop_porcupine` com mic
+   de verdade.
+5. Plugar `audio_file_input.py` em `main.py` (menu ou pasta
+   vigiada).
+6. Abrir `ios/SendToVisperIntent.swift` num projeto Xcode novo, fazer
+   compilar, testar o Atalho de ponta a ponta — prestar atenção
+   especial em qual das três frases da Siri realmente pede/preenche o
+   parâmetro `command` direito (ver comentário no arquivo).
+7. Design: reagir aos conceitos em `design/` — manter, ajustar ou
+   trocar de direção — e só então gerar o resto dos assets (ícone em
+   todos os tamanhos exigidos pelo iOS/macOS).
+
+## Ideias sugeridas, ainda não construídas
+
+A Valeta decide o que vale a pena construir — isso é só uma lista de
+ideias que surgiram, não um compromisso:
+- Feedback VISUAL (o mascote mudando de estado na barra de menu) —
+  o sonoro já existe (earcon em `config.DICTATION_*_SOUND`, ver
+  abaixo), mas continua sem nada visual além do texto do submenu.
+- Palavra de cancelar (ex. "vIsper, cancela") pra descartar o ditado
+  em vez de mandar.
+- Envio automático depois de alguns segundos de silêncio, como rede
+  de segurança pra quando esquecer de repetir a wake word.
+- Comando que manda direto o que já está copiado (pula o ditado).
+- Apple Watch: o mesmo App Intent do iPhone, disparável pelo relógio
+  — combina com o caso de uso do treino.
+
+## Preferências da Valeta pra esse projeto
+
+- **Testar duas vezes antes de considerar pronto** — rodando de
+  verdade sempre que possível, não só checando sintaxe. Quando
+  hardware real não está disponível, testar a lógica isolada com
+  mocks e deixar bem claro, por escrito, o que ficou sem validar.
+- **Zero custo adicional e o mínimo de atrito possível** são
+  prioridade em qualquer decisão de arquitetura — é o critério de
+  desempate padrão quando há mais de um jeito de resolver algo.
+- Comunica em português e inglês.
+- Texto de produto (UI) em inglês; código/documentação deste projeto
+  em português.

@@ -1,0 +1,93 @@
+"""
+relay_listener.py — ouve comandos vindos do app de iPhone via ntfy
+(https://ntfy.sh), pra funcionar de qualquer lugar, não só na mesma
+Wi-Fi do Mac (ex.: usar do treino, da rua).
+
+Como funciona: o iPhone publica o texto do comando (mesmo formato que
+o Whisper produziria, tipo "vIsper claude confirma a reunião") num
+tópico do ntfy. Esse listener fica inscrito nesse tópico e, pra cada
+mensagem que chegar, passa ela pro MESMO DictationSession que já
+processa o áudio local — é o mesmo pipeline testado, só muda de onde
+o texto vem.
+
+IMPORTANTE (segurança): tópicos do ntfy.sh não têm senha por padrão —
+qualquer um que adivinhar o nome do tópico pode mandar comando pro
+seu Mac, e isso aciona automação de verdade (abrir apps, colar texto,
+simular Enter). Configure NTFY_TOPIC em config.py com um nome longo e
+aleatório — nunca algo óbvio tipo "visper" ou o seu nome.
+
+NUNCA TESTADO DE VERDADE ainda — escrito com base na documentação
+pública do ntfy (endpoint /json de streaming), mas o sandbox onde
+isso foi escrito não tem acesso de rede ao ntfy.sh pra validar a
+conexão de ponta a ponta. O que ESTÁ testado (ver test_relay_listener.py)
+é a lógica de parsing e a integração com DictationSession, com a rede
+simulada. Primeira coisa a validar de verdade quando estiver no Mac
+com Claude Code: rodar isso contra o ntfy.sh real.
+"""
+
+import json
+import time
+
+import requests
+
+
+class RelayListener:
+    def __init__(self, session, topic: str, server: str = "https://ntfy.sh"):
+        """
+        session: a mesma DictationSession usada pelo áudio local —
+                 compartilhar a instância evita dois estados
+                 "tô ditando ou não" desencontrados entre mic e ntfy.
+        topic: nome do tópico ntfy (ver aviso de segurança acima).
+        """
+        self.session = session
+        self.topic = topic
+        self.server = server.rstrip("/")
+        self.running = False
+
+    def listen_forever(self, on_result=None):
+        """
+        Conecta no stream de eventos do tópico e processa cada
+        mensagem que chegar. Reconecta sozinho se a conexão cair
+        (rede instável, Mac saiu de suspensão, etc.) em vez de matar
+        a thread pro resto da sessão do app.
+
+        on_result: função opcional(str) -> None, chamada com o que
+                   DictationSession.handle() retornar — pluga numa
+                   notificação, igual ao loop de áudio local em
+                   main.py.
+        """
+        self.running = True
+        url = f"{self.server}/{self.topic}/json"
+        backoff_seconds = 5
+        max_backoff_seconds = 60
+
+        while self.running:
+            try:
+                with requests.get(url, stream=True, timeout=(10, 90)) as resp:
+                    resp.raise_for_status()
+                    backoff_seconds = 5  # reconectou de verdade, reseta o backoff
+                    for line in resp.iter_lines():
+                        if not self.running:
+                            break
+                        if not line:
+                            continue  # linha de keepalive do ntfy, ignora
+                        event = json.loads(line)
+                        if event.get("event") != "message":
+                            continue  # ignora "open"/keepalive, só processa mensagem
+                        text = event.get("message", "")
+                        if not text:
+                            continue
+                        result = self.session.handle(text)
+                        if result and on_result:
+                            on_result(result)
+            except (requests.RequestException, json.JSONDecodeError):
+                # rede caiu ou o Mac saiu de suspensão — espera um
+                # pouco e tenta reconectar, sem derrubar a thread.
+                # Backoff exponencial (5s, 10s, 20s... até 60s) em vez
+                # de fixo: recupera rápido de uma falha rápida, mas
+                # não fica martelando o servidor numa queda longa.
+                time.sleep(backoff_seconds)
+                backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
+
+    def stop(self):
+        self.running = False
