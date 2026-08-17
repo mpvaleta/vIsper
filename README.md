@@ -113,6 +113,64 @@ Um ícone aparece na barra de menu. Clique nele para:
   ainda funciona, sem precisar reiniciar o app)
 - **Parar escuta** — pausa
 
+## Instalar como app de verdade (`.app` + `.dmg`)
+
+Depois que `python3 main.py` estiver funcionando, dá pra empacotar
+tudo num `vIsper.app` que abre com duplo clique — sem Terminal, sem
+`source venv/bin/activate`, arrastável pra `/Applications` como
+qualquer outro app.
+
+```bash
+./build_mac_app.sh
+```
+
+Isso cuida de tudo: cria/atualiza o venv, instala as dependências e o
+py2app, gera o ícone `.icns` a partir do mascote, empacota o `.app` e
+monta o `vIsper.dmg` em volta dele. Demora bastante na primeira vez —
+o `faster-whisper` traz centenas de MB de libs nativas
+(`ctranslate2`, `onnxruntime`) que vão todas pra dentro do bundle.
+
+Se estiver só testando e não quiser esperar:
+
+```bash
+./build_mac_app.sh --dev
+```
+
+Build em segundos, mas o `.app` fica sendo um atalho pro venv desta
+pasta — quebra se você mover ou apagar a pasta do vIsper. Bom pra
+iterar, não pra instalar de verdade.
+
+**Ao abrir pela primeira vez, use botão direito → Abrir.** O app não
+é assinado por um desenvolvedor pago da Apple (US$99/ano, contra o
+princípio de custo zero deste projeto), então o duplo clique é
+bloqueado pelo Gatekeeper na primeira vez. Depois disso o duplo
+clique normal funciona.
+
+Diferença que importa em relação a rodar pelo Terminal: as permissões
+de **Microfone** e **Acessibilidade** passam a ser concedidas ao
+`vIsper.app`, não ao Terminal — mais limpo, e é o que permite o
+LaunchAgent/login automático sem Terminal nenhum aberto. Você vai
+precisar autorizar as duas de novo na primeira abertura do `.app`
+(são permissões por binário; ver "Instalação" acima).
+
+Como o app não tem Terminal, erro de inicialização não aparece em
+lugar nenhum visível. Pra ver o que ele está fazendo:
+
+```bash
+log stream --predicate 'process == "vIsper"' --level debug
+```
+
+Na primeiríssima execução ele baixa o modelo do Whisper (~150 MB, vai
+pro `~/.cache/`), então precisa de internet e pode demorar alguns
+minutos antes do ícone aparecer. Nas seguintes é imediato.
+
+**Ainda não testado num Mac de verdade** — mesma honestidade do resto
+do projeto. O `setup.py` foi escrito contra a documentação do py2app,
+e o script foi validado sintaticamente, mas nenhum build de verdade
+rodou. Se o build standalone der problema com as libs nativas do
+faster-whisper, o `--dev` acima é o plano B imediato, e rodar por
+`python3 main.py` continua funcionando de qualquer jeito.
+
 ## Deixar rodando sozinho, sem precisar abrir Terminal (LaunchAgent)
 
 Depois que `python3 main.py` estiver funcionando bem manualmente
@@ -267,10 +325,18 @@ curl -d "vIsper claude confirma o teste" https://ntfy.sh/SEU_TOPICO
 Isso deve abrir o Claude e colar o texto, exatamente como se tivesse
 sido falado no mic local.
 
-O lado do iPhone (`ios/SendToVisperIntent.swift`) é um **rascunho
-ainda não compilado** — escrito sem acesso a Xcode. Precisa: criar um
-projeto Xcode novo, colar o arquivo dentro, trocar o placeholder do
-tópico pelo mesmo valor de `NTFY_TOPIC`, e testar de ponta a ponta.
+O lado do iPhone: **use o app Atalhos, não o Xcode** — passo a passo
+completo em [`ios/ATALHO_IPHONE.md`](ios/ATALHO_IPHONE.md). São ~3
+minutos, sem compilar nada, sem conta de desenvolvedor, e o mesmo
+atalho já funciona na Siri, no Botão de Ação e no Apple Watch (o caso
+de uso do treino).
+
+Não existe "instalar um `.dmg` no iPhone" — iOS só aceita app da App
+Store ou compilado e assinado no Xcode, e com conta grátis o app
+expira em 7 dias. O `ios/SendToVisperIntent.swift` continua no
+repositório como caminho avançado (app próprio na tela de início),
+mas exige Xcode, **nunca foi compilado**, e não é necessário enquanto
+o Atalho resolver.
 
 ## Limite atual do reconhecimento de wake word
 

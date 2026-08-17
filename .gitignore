@@ -13,5 +13,13 @@ venv/
 visper.out.log
 visper.err.log
 
+# Saída do build do .app/.dmg (build_mac_app.sh) — tudo isso é
+# gerado, inclusive o .icns (feito a partir do PNG do mascote, que
+# esse sim está versionado).
+build/
+dist/
+vIsper.dmg
+design/vIsper.icns
+
 # Lixo do Finder.
 .DS_Store

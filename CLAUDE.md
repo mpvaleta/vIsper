@@ -400,6 +400,58 @@ de verdade carregou isso ainda; primeira coisa a conferir é se o
 (`visper.out.log`/`visper.err.log`, na pasta do vIsper) se não
 aparecer.
 
+Empacotamento (`setup.py` + `build_mac_app.sh`) — transforma o código
+Python num `vIsper.app` de duplo clique e monta um `vIsper.dmg` em
+volta. Motivo de existir: a Valeta pediu explicitamente "um dmg e um
+app pra instalar", depois de tropeçar justamente no atrito de
+`cd` + `source venv/bin/activate` + `pip install` (ver "Preferências":
+mínimo de atrito é critério de arquitetura aqui). Decisões tomadas:
+- **py2app, não PyInstaller** — py2app é o que gera bundle `.app`
+  nativo de barra de menu com `Info.plist` de verdade, que é
+  exatamente do que o rumps precisa.
+- **`LSUIElement = True`** — sem isso o app apareceria no Dock e no
+  Cmd+Tab; é um app de barra de menu, não deve.
+- **`NSMicrophoneUsageDescription` e `NSAppleEventsUsageDescription`
+  são obrigatórias, não opcionais** — rodando por Terminal quem pedia
+  permissão era o Terminal; num `.app` é o próprio app, e sem essas
+  chaves o macOS moderno MATA o processo em vez de mostrar o diálogo.
+  Texto delas em inglês de propósito (aparece na UI do sistema).
+- **`argv_emulation` PRECISA ser False** — depende do Carbon, que não
+  existe mais em 64-bit; travaria o app na abertura.
+- **Assinatura ad-hoc (`codesign -s -`), não conta paga da Apple** —
+  US$99/ano contraria o custo zero. O ad-hoc não tira o aviso do
+  Gatekeeper (primeira abertura ainda precisa de botão direito →
+  Abrir), mas dá ao app uma identidade ESTÁVEL, e isso importa porque
+  o macOS amarra permissão concedida (mic/Acessibilidade) à
+  assinatura — sem ele, toda recompilação pediria tudo de novo.
+- **Dois modos de build**: standalone (padrão, autocontido, centenas
+  de MB por causa do ctranslate2/onnxruntime que o faster-whisper
+  puxa) e `--dev` (alias, segundos, mas o `.app` vira atalho pro venv
+  desta pasta e quebra se ela sair do lugar). O `--dev` é o plano B
+  documentado caso o standalone brigue com as libs nativas.
+- **Ícone gerado no build, não versionado** — `sips`+`iconutil` fazem
+  o `.icns` a partir de `design/mascot_concept_v1_preview.png` (400px,
+  então 512/1024 são upscale e ficam macios — aceito porque o mascote
+  ainda é conceito não aprovado). Trocar a arte é trocar o PNG.
+**NUNCA RODOU NUM MAC** — só validação de sintaxe (`bash -n`,
+`py_compile`). É a peça menos validada junto com o LaunchAgent.
+
+iOS via app Atalhos (`ios/ATALHO_IPHONE.md`) — receita passo a passo
+pra montar no app Atalhos (que já vem no iPhone) o mesmo POST no
+tópico ntfy que o rascunho Swift faria. **Passou a ser o caminho
+recomendado, e o Swift virou "avançado"**: iOS não instala app de
+arquivo (não existe DMG de iPhone) — ou App Store, ou Xcode + conta;
+com conta grátis o app EXPIRA EM 7 DIAS, com conta paga são US$99/ano.
+As duas alternativas contrariam custo zero/mínimo atrito, e o Atalho
+não custa nada, não expira, e já roda na Siri/Botão de Ação/Apple
+Watch de graça (o Watch era uma das "ideias ainda não construídas" —
+sai junto sem trabalho extra). Detalhe da receita que importa: o
+Atalho monta `vIsper <ditado> over` numa string só, então ela cai
+exatamente no caminho "abre e fecha no MESMO trecho" de
+`dictation.py` — o que aquele bug de uma-respiração-só corrigiu é o
+que faz o iPhone funcionar em um disparo. Não testado (sem iPhone
+aqui).
+
 Design (`design/`):
 - `mascot_concept_v1.svg` — mascote colorido (lavanda), com preview
   em PNG. Conceito: "antena de som" no lugar de orelha de bicho,
@@ -450,6 +502,18 @@ mudar bastante antes de virar assets de produção.
 7. `launchd/com.valeta.visper.plist` (início automático no login)
    nunca foi carregado por um `launchctl` de verdade — só validado
    como XML bem formado (`plistlib`). Ver "Próximos passos" #2.
+8. `setup.py`/`build_mac_app.sh` (o `.app`/`.dmg`) nunca rodaram num
+   Mac — só `bash -n` e `py_compile`. O risco concreto é o py2app
+   standalone não conseguir empacotar as libs nativas que o
+   faster-whisper puxa (`ctranslate2`, `onnxruntime`, `av`): elas não
+   são rastreáveis por import, por isso estão listadas à mão em
+   `PACKAGES`. Se faltar alguma, o `.app` abre e morre calado — sem
+   Terminal não aparece erro em lugar nenhum (usar
+   `log stream --predicate 'process == "vIsper"'` pra ver). Plano B
+   documentado no README: `./build_mac_app.sh --dev`.
+9. O app empacotado não é assinado por conta paga da Apple, então a
+   PRIMEIRA abertura exige botão direito → Abrir (Gatekeeper). Não
+   tem como remover isso sem os US$99/ano.
 
 ## Próximos passos, em ordem de prioridade
 
