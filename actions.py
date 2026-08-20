@@ -5,25 +5,84 @@ um comando.
 Cada função aqui deve ser rápida e não-bloqueante: abre um app ou URL e
 retorna na hora, sem esperar o app terminar de carregar.
 
-Todo subprocess.run() aqui usa check=True de propósito: sem isso, uma
+Tudo passa por _run(), que usa check=True de propósito: sem isso, uma
 falha (ex.: permissão de Acessibilidade ainda não concedida — ver
 handle_done()) fazia a ação simplesmente NÃO FAZER NADA, sem erro
 nenhum — quem chamou não tinha como saber que o "cola e manda" falhou.
-Com check=True, a falha vira CalledProcessError; quem chama por voz
-(main.py, via DictationSession) já está preparado pra isso —
-_listen_loop_safe() captura e avisa por notificação, em vez de morrer
-calado ou fingir que funcionou.
+Com check=True a falha vira exceção; quem chama por voz (main.py, via
+DictationSession) já está preparado pra isso — _listen_loop_safe()
+captura e avisa, em vez de morrer calado ou fingir que funcionou.
+
+E _run() ainda separa um caso do resto: recusa de PERMISSÃO vira
+AutomationDenied, não CalledProcessError genérica. Isso importa porque
+é a falha mais provável da primeira execução e a única cuja correção é
+um caminho fixo de Ajustes do Sistema — misturada com as outras, ela
+virava "erro no áudio" e mandava investigar o microfone à toa.
+
+A exceção da exceção é play_sound(), que engole falha de propósito —
+earcon não pode travar o ditado nem parecer que a ação real falhou.
 """
 
 import subprocess
 
 
+class AutomationDenied(Exception):
+    """
+    O macOS recusou simular teclado / controlar outro app.
+
+    Existe pra separar ESSA falha das outras. Ela é, de longe, a mais
+    provável na primeira execução — o macOS só pede as permissões de
+    Acessibilidade e de Automação quando o app tenta usá-las pela
+    primeira vez, e até alguém marcar a caixinha em Ajustes toda colagem
+    falha. Sem essa distinção, main.py reportava tudo como "erro no
+    áudio", mandando investigar o microfone quando o microfone estava
+    perfeito e o que faltava era um clique em Ajustes do Sistema.
+    """
+
+
+# Trechos que o osascript devolve quando a recusa é de PERMISSÃO, não
+# um erro de script. Os códigos são estáveis; o texto em volta muda com
+# o idioma do sistema, por isso a checagem é pelos números também.
+_NEGADO = (
+    "not allowed assistive access",
+    "not authorized to send apple events",
+    "-1719",   # errAEEventNotPermitted / sem acesso assistivo
+    "-25211",  # System Events sem acesso assistivo
+    "-1743",   # sem permissão de Automação pro app alvo
+)
+
+
+def _run(cmd, **kwargs):
+    """
+    subprocess.run com check=True, traduzindo recusa de permissão em
+    AutomationDenied.
+
+    Captura o stderr (antes ele ia direto pro terminal e se perdia) pra
+    conseguir olhar a mensagem — é o que permite distinguir "o macOS não
+    deixou" de "o script estava errado".
+    """
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, **kwargs)
+    except subprocess.CalledProcessError as exc:
+        erro = (exc.stderr or b"")
+        if isinstance(erro, bytes):
+            erro = erro.decode("utf-8", "replace")
+        if any(marca in erro.lower() for marca in _NEGADO):
+            raise AutomationDenied(erro.strip() or "permission denied") from exc
+        # Reanexa o stderr na mensagem: com capture_output, o texto do
+        # osascript não aparece mais sozinho no terminal, e sem isso a
+        # notificação de erro mostraria só "exit status 1".
+        raise subprocess.CalledProcessError(
+            exc.returncode, exc.cmd, exc.output, exc.stderr
+        ) from None
+
+
 def _open_url(url: str):
-    subprocess.run(["open", url], check=True)
+    _run(["open", url])
 
 
 def _open_app(app_name: str):
-    subprocess.run(["open", "-a", app_name], check=True)
+    _run(["open", "-a", app_name])
 
 
 def open_claude():
@@ -42,7 +101,7 @@ def open_claude_code():
         do script "cd ~ && claude"
     end tell
     '''
-    subprocess.run(["osascript", "-e", script], check=True)
+    _run(["osascript", "-e", script])
 
 
 def open_perplexity():
@@ -64,9 +123,9 @@ def paste_text(text: str):
     acento nem emoji, e funciona em qualquer campo de texto que
     aceite colar (o que cobre o chat de qualquer uma das IAs aqui).
     """
-    subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+    _run(["pbcopy"], input=text.encode("utf-8"))
     script = 'tell application "System Events" to keystroke "v" using command down'
-    subprocess.run(["osascript", "-e", script], check=True)
+    _run(["osascript", "-e", script])
 
 
 def play_sound(name: str):
@@ -108,7 +167,7 @@ def handle_done():
     simplesmente nunca chega.
     """
     script = 'tell application "System Events" to keystroke return'
-    subprocess.run(["osascript", "-e", script], check=True)
+    _run(["osascript", "-e", script])
 
 
 # Chaves aqui têm que bater com as chaves de AI_TRIGGERS em config.py

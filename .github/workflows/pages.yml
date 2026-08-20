@@ -1,0 +1,57 @@
+name: Publicar o app de iPhone
+
+# Publica docs/ no GitHub Pages, que é o que faz o app de iPhone
+# existir num endereço de verdade:
+#
+#   https://mpvaleta.github.io/vIsper/
+#
+# Ela abre isso no Safari do iPhone, faz Compartilhar → Adicionar à
+# Tela de Início, e ganha um ícone que se comporta como app — sem
+# Xcode, sem conta de desenvolvedor, sem expirar em 7 dias. Grátis em
+# repositório público.
+#
+# `configure-pages` com enablement: true LIGA o Pages sozinho na
+# primeira execução, então não precisa mexer em Settings à mão.
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Uma publicação por vez; não cancela a que está no meio.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ligar o Pages se ainda não estiver ligado
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Empacotar docs/
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Publicar
+        id: deploy
+        uses: actions/deploy-pages@v4

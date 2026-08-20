@@ -20,15 +20,42 @@ class CommandRouter:
 
     def route(self, transcript: str):
         """
-        Processa um texto transcrito. Retorna None se a wake word não
-        apareceu ou não bateu com nada reconhecível; senão retorna
-        (nome_da_ia, leftover) — `leftover` é o que sobrou depois do
-        nome da IA (ou "" se foi só a wake word sozinha, abrindo
-        DEFAULT_AI), com capitalização/acento/pontuação ORIGINAIS
-        preservados (text_utils.text_after_word()), pra não perder
-        conteúdo dito na MESMA respiração que o comando de abrir — ex.:
-        "vIsper claude qual é a previsão do tempo" tudo de uma vez.
+        Processa um texto transcrito, ABRINDO a IA escolhida. Retorna
+        None se a wake word não apareceu ou não bateu com nada
+        reconhecível; senão retorna (nome_da_ia, leftover) — `leftover`
+        é o que sobrou depois do nome da IA (ou "" se foi só a wake word
+        sozinha, abrindo DEFAULT_AI), com capitalização/acento/pontuação
+        ORIGINAIS preservados (text_utils.text_after_word()), pra não
+        perder conteúdo dito na MESMA respiração que o comando de abrir —
+        ex.: "vIsper claude qual é a previsão do tempo" tudo de uma vez.
         Quem chama (dictation.py) decide o que fazer com esse resto.
+        """
+        decision = self._decide(transcript)
+        if decision is None:
+            return None
+        ai_name, leftover = decision
+        self.ai_actions[ai_name]()
+        return ai_name, leftover
+
+    def preview(self, transcript: str):
+        """
+        Qual IA este texto ABRIRIA — sem abrir nada.
+
+        Existe pro relay do iPhone (relay_listener.py) poder recusar
+        certos alvos antes de qualquer ação acontecer. Reusa exatamente
+        a mesma decisão de route(): duplicar essa lógica num filtro
+        separado seria a receita pra ele divergir do roteador e liberar
+        justamente o que deveria barrar.
+
+        Retorna o nome da IA, ou None se o texto não abriria nada.
+        """
+        decision = self._decide(transcript)
+        return decision[0] if decision else None
+
+    def _decide(self, transcript: str):
+        """
+        Toda a decisão, NENHUM efeito colateral. Retorna
+        (nome_da_ia, leftover) ou None.
         """
         if not contains_word(transcript, WAKE_WORD):
             return None
@@ -41,7 +68,6 @@ class CommandRouter:
         # final com frequência) contaria "." como se fosse conteúdo, e
         # esse "." viraria o primeiro item do buffer de ditado.
         if not after_wake:
-            self.ai_actions[DEFAULT_AI]()
             return DEFAULT_AI, ""
 
         # Ganha o apelido que aparece PRIMEIRO na fala; empate na mesma
@@ -73,7 +99,6 @@ class CommandRouter:
             return None
 
         _key, trigger, ai_name = best
-        self.ai_actions[ai_name]()
         # Recalcula sobre o texto ORIGINAL (não `after_wake`, que já
         # veio dobrado/minúsculo/sem pontuação) — o resto pode virar
         # conteúdo real de ditado.

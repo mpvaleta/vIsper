@@ -11,7 +11,7 @@ corretas antes desse teste real.
 
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import requests
 
@@ -192,3 +192,79 @@ class RelayListenerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TravasDoRelayTest(unittest.TestCase):
+    """
+    O tópico do ntfy é a única senha do canal. Estas travas são a
+    SEGUNDA, pro caso da primeira falhar — ver config.RELAY_BLOCKED_AIS
+    e RELAY_MAX_MESSAGE_CHARS.
+    """
+
+    def _session(self, dictating=False, preview_ai=None):
+        session = MagicMock()
+        session.dictating = dictating
+        session.router.preview.return_value = preview_ai
+        session.handle.return_value = "ok"
+        return session
+
+    def test_claude_code_pelo_iphone_e_recusado(self):
+        # Abrir o Terminal e digitar nele é execução de comando, não
+        # "digitar num chat de IA" — a diferença de gravidade entre as
+        # duas é grande demais pra deixar no mesmo balde.
+        session = self._session(preview_ai="claude_code")
+        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
+
+        resultado = listener._handle_message("vIsper claude code rm -rf algo over")
+
+        session.handle.assert_not_called()
+        self.assertIn("claude_code", resultado)
+
+    def test_recusa_explica_em_vez_de_sumir_calada(self):
+        # Mensagem sumindo sem explicação é indistinguível de "o relay
+        # não está funcionando".
+        session = self._session(preview_ai="claude_code")
+        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
+        self.assertTrue(listener._handle_message("vIsper claude code oi"))
+
+    def test_ia_permitida_passa_normalmente(self):
+        session = self._session(preview_ai="claude")
+        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
+
+        resultado = listener._handle_message("vIsper claude qual é a previsão over")
+
+        session.handle.assert_called_once_with("vIsper claude qual é a previsão over")
+        self.assertEqual(resultado, "ok")
+
+    def test_com_ditado_ja_aberto_nao_consulta_o_roteador(self):
+        # Texto durante o ditado é CONTEÚDO, não passa pelo roteador —
+        # consultar preview() aqui poderia barrar uma frase legítima só
+        # por ela conter as palavras "claude code".
+        session = self._session(dictating=True, preview_ai="claude_code")
+        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
+
+        listener._handle_message("preciso revisar o claude code amanhã")
+
+        session.router.preview.assert_not_called()
+        session.handle.assert_called_once()
+
+    def test_lista_de_bloqueio_vazia_libera_tudo(self):
+        session = self._session(preview_ai="claude_code")
+        listener = RelayListener(session, topic="t", blocked_ais=[])
+        listener._handle_message("vIsper claude code oi")
+        session.handle.assert_called_once()
+
+    def test_mensagem_gigante_e_cortada_antes_de_ser_colada(self):
+        session = self._session(preview_ai="claude")
+        listener = RelayListener(session, topic="t", max_chars=50)
+
+        resultado = listener._handle_message("x" * 51)
+
+        session.handle.assert_not_called()
+        self.assertIn("grande demais", resultado)
+
+    def test_mensagem_no_limite_exato_passa(self):
+        session = self._session(preview_ai="claude")
+        listener = RelayListener(session, topic="t", max_chars=50)
+        listener._handle_message("x" * 50)
+        session.handle.assert_called_once()

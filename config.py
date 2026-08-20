@@ -80,6 +80,26 @@ CLOSE_TRIGGERS = ["câmbio", "over"]
 # antigo deixa de valer.
 NTFY_TOPIC = ""
 
+# IAs que o relay do iPhone NÃO pode abrir, mesmo com o tópico certo.
+#
+# Por que isso existe: abrir "claude_code" roda um AppleScript que abre
+# o Terminal e DIGITA dentro dele. Pelo microfone local isso é ótimo —
+# você está na frente da máquina. Vindo do ntfy é outra coisa: quem
+# souber o tópico deixa de "conseguir digitar num chat de IA" e passa a
+# "conseguir digitar num terminal", que é execução de comando. A
+# diferença de gravidade entre as duas é grande demais pra deixar as
+# duas no mesmo balde.
+#
+# Isso não substitui manter o tópico secreto — é a segunda tranca, pro
+# caso da primeira falhar. Esvazie a lista ([]) se quiser mesmo poder
+# abrir o Terminal pelo iPhone.
+RELAY_BLOCKED_AIS = ["claude_code"]
+
+# Tamanho máximo (caracteres) de uma mensagem vinda do relay. Uma
+# mensagem gigante seria colada inteira no chat da IA; o ntfy aceita
+# corpos bem maiores do que qualquer ditado real precisa.
+RELAY_MAX_MESSAGE_CHARS = 4000
+
 # Motor de wake-word de verdade (opcional) — reconhece o SOM da
 # palavra em vez de procurar ela numa transcrição escrita. Ver
 # wake_word_porcupine.py e o passo a passo no README pra conseguir

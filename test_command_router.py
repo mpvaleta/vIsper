@@ -129,3 +129,48 @@ class CommandRouterTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreviewTest(unittest.TestCase):
+    """
+    preview() responde "qual IA isto abriria" SEM abrir. É o que
+    permite ao relay do iPhone recusar alvos antes de qualquer ação
+    acontecer (ver config.RELAY_BLOCKED_AIS).
+    """
+
+    def setUp(self):
+        self.abertas = []
+        self.router = CommandRouter(
+            {
+                nome: (lambda n=nome: self.abertas.append(n))
+                for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+            }
+        )
+
+    def test_preview_nao_abre_nada(self):
+        alvo = self.router.preview("vIsper claude code faz um deploy")
+        self.assertEqual(alvo, "claude_code")
+        self.assertEqual(self.abertas, [], "preview() não podia ter aberto nada")
+
+    def test_preview_concorda_com_route(self):
+        # Se as duas divergirem, o filtro do relay libera justamente o
+        # que deveria barrar — por isso preview() e route() dividem o
+        # mesmo _decide() em vez de terem lógicas paralelas.
+        for texto in [
+            "vIsper claude qual é a previsão",
+            "vIsper claude code roda os testes",
+            "vIsper",
+            "vIsper e não o perplexity",
+            "nada disso é comando",
+            "vIsper chatgpt resume isso over",
+        ]:
+            with self.subTest(texto=texto):
+                previsto = self.router.preview(texto)
+                self.abertas.clear()
+                resultado = self.router.route(texto)
+                obtido = resultado[0] if resultado else None
+                self.assertEqual(previsto, obtido)
+
+    def test_texto_sem_wake_word_nao_preve_nada(self):
+        self.assertIsNone(self.router.preview("o claude code é bom"))
+        self.assertEqual(self.abertas, [])

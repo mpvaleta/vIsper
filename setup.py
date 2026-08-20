@@ -26,9 +26,44 @@ pedia permissão era o Terminal; num .app é o próprio .app — por isso
 elas só passam a ser obrigatórias aqui.
 """
 
+import os
+import sys
+
 from setuptools import setup
 
 APP = ["main.py"]
+
+
+def _portaudio_dylib():
+    """
+    Caminho do libportaudio que vem dentro da roda do sounddevice.
+
+    Precisa ir pro bundle à mão. O sounddevice procura essa lib por um
+    caminho RELATIVO ao próprio sounddevice.py; dentro de um .app o
+    módulo acaba num zip, o caminho relativo deixa de existir, e o
+    import falha — o que, num app sem Terminal, aparece como um ícone
+    que nunca surge e nenhuma explicação em lugar nenhum. Listar o
+    pacote em PACKAGES resolve metade (tira do zip); o dylib em si
+    ainda precisa ser copiado.
+
+    Devolve None se não achar (ex.: sounddevice instalado contra um
+    PortAudio do sistema, via Homebrew) — nesse caso não há o que
+    copiar e o py2app resolve pelo caminho normal.
+    """
+    try:
+        import sounddevice  # noqa: F401  (só pra descobrir onde ele está)
+    except Exception:
+        return None
+
+    base = os.path.dirname(os.path.abspath(sounddevice.__file__))
+    for pasta in (base, os.path.dirname(base)):
+        candidato = os.path.join(pasta, "_sounddevice_data", "portaudio-binaries")
+        if not os.path.isdir(candidato):
+            continue
+        for nome in os.listdir(candidato):
+            if nome.endswith(".dylib"):
+                return os.path.join(candidato, nome)
+    return None
 
 # Módulos locais do projeto. py2app segue os imports sozinho, mas
 # listar explícito evita que algum caminho só alcançado em runtime
@@ -44,6 +79,9 @@ LOCAL_MODULES = [
     "porcupine_session",
     "relay_listener",
     "text_utils",
+    # config.py importa este na PRIMEIRA linha — sem ele no bundle, o
+    # .app morre no import de config, antes de qualquer outra coisa.
+    "user_settings",
     "wake_word_porcupine",
 ]
 
@@ -66,6 +104,8 @@ PACKAGES = [
     "tokenizers",
 ]
 
+FRAMEWORKS = [caminho for caminho in [_portaudio_dylib()] if caminho]
+
 OPTIONS = {
     # NUNCA True: argv_emulation depende do Carbon, que não existe mais
     # em macOS 64-bit — trava o app na abertura. O vIsper não recebe
@@ -74,6 +114,7 @@ OPTIONS = {
     "iconfile": "design/vIsper.icns",
     "packages": PACKAGES,
     "includes": LOCAL_MODULES,
+    "frameworks": FRAMEWORKS,
     "plist": {
         "CFBundleName": "vIsper",
         "CFBundleDisplayName": "vIsper",

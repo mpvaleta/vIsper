@@ -52,6 +52,15 @@ def load_saved_device_name():
         data = json.loads(DEVICE_STATE_PATH.read_text())
     except (OSError, ValueError):
         return None
+    # Precisa checar que é DICIONÁRIO antes do .get(): um arquivo com
+    # JSON perfeitamente válido mas de outro formato (`[]`, `"texto"`,
+    # `null` — de uma versão futura, de edição à mão, ou de uma escrita
+    # cortada no meio) passa pelo json.loads e explodia com
+    # AttributeError aqui. Como isso roda dentro do __init__ do app, a
+    # exceção matava o vIsper ANTES do ícone existir — sem Terminal, num
+    # .app, isso é um app que simplesmente não abre e não explica nada.
+    if not isinstance(data, dict):
+        return None
     name = data.get("device_name")
     return name if isinstance(name, str) and name else None
 
@@ -152,6 +161,45 @@ def guess_preferred_device(preferred=None):
             if any(keyword in lowered for keyword in group["keywords"]):
                 return index, name, group.get("bluetooth", False)
     return None
+
+
+def default_input_device():
+    """
+    Último recurso: o microfone que o próprio macOS já usa por padrão
+    (normalmente o embutido do MacBook).
+
+    Existe porque `guess_preferred_device()` só reconhece o que está em
+    config.PREFERRED_INPUT_DEVICES — hoje DJI Mic e Sony XM5. Sem
+    nenhum dos dois plugado, ela devolve None e o app respondia a
+    "Iniciar escuta" com um alerta e mais nada. Ou seja: quem abrisse o
+    vIsper sem o mic específico em mãos concluiria que o app não
+    funciona, quando havia um microfone perfeitamente bom ali o tempo
+    todo.
+
+    Retorna (índice, nome, is_bluetooth) ou None se a máquina não tiver
+    nenhuma entrada de áudio.
+
+    O is_bluetooth vem de classify_device(): o padrão do sistema PODE
+    ser um fone Bluetooth (se ela conectou o fone e o macOS mudou o
+    padrão sozinho), e nesse caso o aviso de qualidade continua valendo.
+    """
+    try:
+        default = sd.default.device
+        index = default[0] if isinstance(default, (list, tuple)) else default
+        if index is None or index < 0:
+            raise ValueError("sem dispositivo de entrada padrão")
+        info = sd.query_devices(index)
+        if info["max_input_channels"] <= 0:
+            raise ValueError("o padrão do sistema não é uma entrada")
+        name = info["name"]
+    except Exception:
+        # Qualquer coisa que o PortAudio devolva de estranho aqui vira
+        # "tenta o primeiro da lista" em vez de derrubar a escuta.
+        entradas = list_input_devices()
+        if not entradas:
+            return None
+        index, name = entradas[0]
+    return index, name, classify_device(name)
 
 
 def resolve_device_by_name(name):

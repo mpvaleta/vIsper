@@ -166,6 +166,36 @@
   .icon-btn:active { background: var(--lavender-pale); }
   .icon-btn svg { width: 19px; height: 19px; display: block; }
 
+  /* ---------------- aviso de instalacao ---------------- */
+  .install-tip {
+    background: var(--lavender-pale);
+    border: 1.5px solid var(--lavender-light);
+    border-radius: 13px;
+    padding: 13px 15px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--lavender-dark);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+  .install-tip strong { font-size: 13.5px; }
+  .install-tip em { font-style: normal; font-weight: 700; }
+  :root[data-theme="dark"] .install-tip {
+    background: rgba(164,143,230,0.16);
+    border-color: rgba(164,143,230,0.34);
+    color: var(--lavender-light);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .install-tip {
+      background: rgba(164,143,230,0.16);
+      border-color: rgba(164,143,230,0.34);
+      color: var(--lavender-light);
+    }
+  }
+
   /* ---------------- seletor de IA ---------------- */
   .ai-grid {
     display: grid;
@@ -286,6 +316,11 @@
     /* Comeca no topo em vez de as 3h. */
     transform: rotate(-90deg);
   }
+  /* O atributo `hidden` NAO esconde elemento SVG: a regra
+     `[hidden] { display: none }` do navegador vale so pro namespace
+     HTML. Sem esta linha o anel de contagem fica desenhado por cima do
+     "Send to Mac" o tempo todo, como se estivesse sempre contando. */
+  .countdown svg.ring[hidden] { display: none; }
   .countdown svg.ring circle {
     fill: none;
     stroke: rgba(255,255,255,0.85);
@@ -388,8 +423,11 @@
 
 <header>
   <div class="logo" aria-hidden="true">
-    <!-- Silhueta do mascote (design/menubar_icon_template.svg) -->
-    <svg viewBox="0 0 400 400" fill="#fff">
+    <!-- Silhueta do mascote (design/menubar_icon_template.svg).
+         viewBox recortado no conteudo real (x 135-310, y 123-290) em
+         vez do 0 0 400 400 do arquivo original: com a moldura inteira
+         o desenho ficava minusculo e jogado num canto do badge. -->
+    <svg viewBox="130 114 185 185" fill="#fff">
       <rect x="163" y="135" width="11" height="48" rx="5.5"/>
       <circle cx="168.5" cy="133" r="10"/>
       <rect x="226" y="135" width="11" height="48" rx="5.5"/>
@@ -412,6 +450,14 @@
 
 <!-- ==================== TELA PRINCIPAL ==================== -->
 <div class="screen" id="screen-main" data-active="false">
+  <!-- So aparece enquanto isto for uma aba do Safari. Ver readHash():
+       o app da tela de inicio nao herda o armazenamento do Safari, e a
+       URL do atalho e o que carrega o topico pra la. -->
+  <div class="install-tip" id="install-tip" hidden>
+    <strong>Add vIsper to your Home Screen</strong>
+    <span>Tap the Share button below, then <em>Add to Home Screen</em>. Do it now — it carries your connection over.</span>
+  </div>
+
   <div class="ai-grid" id="ai-grid" role="group" aria-label="Which AI to open"></div>
 
   <div class="field-wrap">
@@ -557,6 +603,13 @@
   // enviado ao servidor por nenhum navegador, entao o topico nunca
   // aparece em log do GitHub Pages — foi por isso que ele vai depois
   // do # e nao como ?query.
+  function isStandalone() {
+    // navigator.standalone e o sinal do iOS; display-mode cobre o resto.
+    return window.navigator.standalone === true ||
+           (window.matchMedia &&
+            window.matchMedia("(display-mode: standalone)").matches);
+  }
+
   function readHash() {
     var hash = location.hash.replace(/^#/, "");
     if (!hash) return false;
@@ -566,10 +619,23 @@
     var mudou = false;
     if (t) { s.topic = t.trim(); mudou = true; }
     if (w) { s.wake = w.trim(); mudou = true; }
-    if (mudou) {
-      save();
-      // Limpa a barra de endereco pra o topico nao ficar visivel nem
-      // ir parar no historico ao compartilhar a tela.
+    if (mudou) save();
+
+    // O hash SO e apagado depois que isto ja esta rodando como app da
+    // tela de inicio.
+    //
+    // Motivo, e e uma armadilha do iOS especifica: um app adicionado a
+    // tela de inicio tem armazenamento SEPARADO do Safari. O topico
+    // salvo aqui enquanto e uma aba do Safari nao existe la dentro. O
+    // que atravessa e a URL guardada no atalho — entao o hash precisa
+    // continuar na barra de endereco na hora do "Adicionar a Tela de
+    // Inicio", senao o app abre vazio e ela tem que digitar 32
+    // caracteres aleatorios a mao.
+    //
+    // (E por isso tambem que o manifest nao define start_url: com ele,
+    // o iOS guardaria a URL do manifest no lugar da atual, jogando o
+    // hash fora do mesmo jeito.)
+    if (mudou && isStandalone()) {
       history.replaceState(null, "", location.pathname + location.search);
     }
     return mudou;
@@ -816,6 +882,7 @@
     updateHint();
 
     if (!s.topic) { toast("Add your topic to connect.", "error"); return; }
+    $("install-tip").hidden = isStandalone();
     showScreen("main");
     toast("Saved", "ok");
   }
@@ -837,6 +904,9 @@
   readHash();
   buildAiGrid();
   updateHint();
+  // O aviso de instalar so faz sentido enquanto ela ainda esta no
+  // Safari E ja tem uma conexao pra levar junto.
+  $("install-tip").hidden = isStandalone() || !s.topic;
   showScreen(s.topic ? "main" : "setup");
   if (!s.topic) openSettings();
 })();

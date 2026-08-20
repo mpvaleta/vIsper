@@ -73,6 +73,12 @@ def _is_bool(value):
     return isinstance(value, bool)
 
 
+def _is_positive_int(value):
+    # bool é subclasse de int em Python: sem excluir explicitamente,
+    # `true` num campo numérico passaria como 1.
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def _is_str_list(value):
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
@@ -111,6 +117,8 @@ VALIDATORS = {
     "PORCUPINE_ACCESS_KEY": _is_str,
     "PORCUPINE_KEYWORD_PATH": _is_str,
     "CLOSE_TRIGGERS": _is_str_list,
+    "RELAY_BLOCKED_AIS": _is_str_list,
+    "RELAY_MAX_MESSAGE_CHARS": _is_positive_int,
     "AI_TRIGGERS": _is_triggers_map,
     "PREFERRED_INPUT_DEVICES": _is_device_groups,
     "DICTATION_SOUNDS_ENABLED": _is_bool,

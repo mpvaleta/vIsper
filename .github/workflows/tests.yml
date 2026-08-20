@@ -36,3 +36,25 @@ jobs:
         # ~/Library/Application Support/vIsper/settings.json, fora daqui
         # — este check existe pra garantir que continue assim.
         run: python check_no_secrets.py
+
+  pwa:
+    # O app de iPhone (docs/) roda num navegador DE VERDADE aqui, não
+    # em mock — o que o torna a peça mais validada do projeto. Cobre o
+    # contrato com dictation.py (a string "<wake> <ia> <texto> over"),
+    # a leitura do link de configuração e o comportamento de erro.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Instalar o Playwright
+        run: |
+          npm init -y >/dev/null
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Rodar os testes do app de iPhone
+        run: node test_pwa.js

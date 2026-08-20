@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import config
+from user_settings import settings_path
 
 
 def _ok(msg):
@@ -27,6 +28,80 @@ def _warn(msg):
 
 def _fail(msg):
     print(f"  FALHA {msg}")
+
+
+def check_python_version():
+    print("Versão do Python:")
+    versao = sys.version_info
+    atual = f"{versao.major}.{versao.minor}.{versao.micro}"
+
+    # A janela real é estreita e não é arbitrária:
+    #   - abaixo de 3.9: o numpy 1.26.4 (requirements.txt) não tem roda.
+    #   - acima de 3.12: idem — o numpy 1.26.4 não publica roda pra
+    #     3.13+, então `pip install -r requirements.txt` cai num build
+    #     de fonte e falha.
+    #   - o Python 3.9 que já vem no macOS funciona pros testes, mas o
+    #     py2app (o .app) precisa de um build com framework, que o do
+    #     sistema não é.
+    if versao < (3, 9):
+        _fail(f"Python {atual} é antigo demais — instale o 3.11 (brew install python@3.11)")
+        return 1
+    if versao >= (3, 13):
+        _fail(
+            f"Python {atual}: o numpy 1.26.4 do requirements.txt não tem roda "
+            "pra 3.13+, então a instalação falha. Use o 3.11 "
+            "(brew install python@3.11 && python3.11 -m venv venv)"
+        )
+        return 1
+    if versao < (3, 10):
+        _warn(
+            f"Python {atual} roda o app, mas empacotar o .app (py2app) "
+            "precisa de 3.10+ com build de framework — o Python que já vem "
+            "no macOS não serve pra isso"
+        )
+        return 0
+    _ok(f"Python {atual}")
+    return 0
+
+
+def check_settings_source():
+    """
+    Mostra de ONDE cada valor veio.
+
+    Sem isto, "meu tópico não funciona" e "o tópico nem estava sendo
+    lido" são a mesma tela — e a segunda é o que acontece quando o
+    settings.json tem um erro de digitação no nome de uma chave, ou está
+    num caminho diferente do esperado.
+    """
+    print("\nConfiguração pessoal:")
+    caminho = settings_path()
+    if not caminho.exists():
+        _warn(
+            f"nenhum settings.json em {caminho} — usando só os padrões do "
+            "config.py. Rode `python3 setup_visper.py` pra criar."
+        )
+        return 0
+
+    if not config.OVERRIDDEN_KEYS:
+        _fail(
+            f"{caminho} existe mas NENHUM valor dele foi aplicado — provável "
+            "erro de digitação num nome de chave, ou valor com o tipo errado "
+            "(ver user_settings.VALIDATORS). Rode `python3 setup_visper.py` "
+            "pra regravar."
+        )
+        return 1
+
+    _ok(f"lido de {caminho}")
+    _ok(f"sobrepondo: {', '.join(config.OVERRIDDEN_KEYS)}")
+
+    modo = caminho.stat().st_mode & 0o777
+    if modo & 0o077:
+        _warn(
+            f"{caminho} está legível por outros usuários da máquina "
+            f"({oct(modo)}) e guarda o tópico do ntfy — rode "
+            f"`chmod 600 {caminho}`"
+        )
+    return 0
 
 
 def check_dependencies():
@@ -85,11 +160,21 @@ def check_input_device():
         _ok(f"dispositivo preferido detectado: [{index}] {name}{tag}")
     else:
         names = ", ".join(f"'{name}'" for _index, name in devices)
-        _warn(
-            f"{len(devices)} dispositivo(s) de entrada disponível(is) ({names}), mas nenhum "
-            "bate com config.PREFERRED_INPUT_DEVICES — a escuta vai pedir escolha manual no "
-            "menu, ou edite PREFERRED_INPUT_DEVICES pra reconhecer o seu"
-        )
+        padrao = audio_input.default_input_device()
+        if padrao:
+            _ok(
+                f"nenhum dispositivo preferido por perto, mas o vIsper vai "
+                f"usar o padrão do sistema: '{padrao[1]}'"
+            )
+            _warn(
+                f"pra um deles ganhar automaticamente, acrescente em "
+                f"config.PREFERRED_INPUT_DEVICES. Disponíveis: {names}"
+            )
+        else:
+            _warn(
+                f"{len(devices)} dispositivo(s) listado(s) ({names}) mas nenhum "
+                "utilizável como entrada agora"
+            )
     return problems
 
 
@@ -105,12 +190,24 @@ def check_ntfy_topic():
     if topic.lower() in weak_examples or len(topic) < 20:
         _fail(
             f"NTFY_TOPIC ('{topic}') parece curto ou óbvio demais — "
-            "tópicos do ntfy.sh são públicos por padrão, gere um valor "
-            "aleatório de verdade (ver README, seção do relay)"
+            "o nome do tópico É a senha que impede qualquer pessoa de "
+            "digitar no seu Mac. Rode `python3 setup_visper.py` pra "
+            "sortear um de verdade"
         )
         problems += 1
     else:
         _ok(f"NTFY_TOPIC configurado, {len(topic)} caracteres — parece aleatório o bastante")
+
+    if config.RELAY_BLOCKED_AIS:
+        _ok(
+            f"o iPhone NÃO pode abrir: {', '.join(config.RELAY_BLOCKED_AIS)} "
+            "(segunda tranca, ver config.RELAY_BLOCKED_AIS)"
+        )
+    else:
+        _warn(
+            "RELAY_BLOCKED_AIS está vazio — quem souber o tópico consegue "
+            "abrir o Terminal e digitar nele, o que é execução de comando"
+        )
     return problems
 
 
@@ -158,6 +255,8 @@ def check_ai_config():
 
 def main():
     total_problems = 0
+    total_problems += check_python_version()
+    total_problems += check_settings_source()
     total_problems += check_dependencies()
     total_problems += check_input_device()
     total_problems += check_ntfy_topic()
