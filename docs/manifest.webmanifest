@@ -1,0 +1,19 @@
+{
+  "name": "vIsper",
+  "short_name": "vIsper",
+  "description": "Talk to your Mac from anywhere.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F6F4FB",
+  "theme_color": "#A48FE6",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "400x400",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

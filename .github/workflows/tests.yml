@@ -1,0 +1,38 @@
+name: Testes
+
+# Roda a suíte inteira a cada push. É barato (Linux, segundos) e serve
+# de rede de segurança: qualquer mudança que quebre a lógica do vIsper
+# aparece aqui antes de virar problema num Mac.
+#
+# Os testes rodam SEM nenhuma dependência nativa de propósito — cada
+# arquivo de teste dubla o que precisa de hardware (sounddevice, rumps,
+# faster_whisper). A única exceção é o numpy, usado de verdade pelos
+# testes de áudio.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar o mínimo
+        run: pip install numpy==1.26.4
+
+      - name: Rodar os testes
+        run: python -m unittest discover -p "test_*.py" -v
+
+      - name: Conferir que nenhum segredo escapou pro repositório
+        # O repo é público e o NTFY_TOPIC é o que impede qualquer pessoa
+        # de disparar automação no Mac dela. Config pessoal mora em
+        # ~/Library/Application Support/vIsper/settings.json, fora daqui
+        # — este check existe pra garantir que continue assim.
+        run: python check_no_secrets.py
