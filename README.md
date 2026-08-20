@@ -17,13 +17,30 @@ usar:
 
 ### O jeito fácil — baixar o app pronto
 
-1. Vá em **[Releases](https://github.com/mpvaleta/vIsper/releases)** e
-   baixe o `.dmg`:
-   - **`vIsper-AppleSilicon.dmg`** — Macs com chip M1, M2, M3 ou M4
-   - **`vIsper-Intel.dmg`** — Macs mais antigos, com processador Intel
+O `.dmg` é compilado num Mac de verdade pelo GitHub a cada mudança no
+código. Pra baixar:
+
+1. Vá na aba **[Actions](https://github.com/mpvaleta/vIsper/actions/workflows/build-macos.yml)**
+   → clique na execução mais recente com ✅ → role até **Artifacts** no
+   fim da página, e baixe o que combina com o seu Mac:
+   - **`vIsper-AppleSilicon`** — Macs com chip M1, M2, M3 ou M4
+   - **`vIsper-Intel`** — Macs mais antigos, com processador Intel
 
    Não sabe qual é o seu? Menu  → **Sobre este Mac** → a linha "Chip"
    (M-alguma-coisa) ou "Processador" (Intel).
+
+   Vem num `.zip` (o GitHub sempre compacta artefato); descompacte e o
+   `.dmg` está lá dentro. Precisa estar logada no GitHub pra baixar.
+
+   > Quer a página de **Releases**, com link direto e sem login? É um
+   > comando, na pasta do vIsper:
+   > ```bash
+   > git tag v0.1.0 && git push origin v0.1.0
+   > ```
+   > Isso dispara o mesmo build e anexa os dois DMGs numa Release de
+   > verdade. (Eu não consigo fazer isso daqui — o ambiente onde este
+   > código foi escrito só tem permissão de push pro branch, não pra
+   > tags: `403` ao tentar.)
 
 2. Abra o `.dmg` e arraste o vIsper pra pasta Applications.
 
