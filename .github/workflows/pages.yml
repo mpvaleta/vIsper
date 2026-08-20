@@ -10,8 +10,16 @@ name: Publicar o app de iPhone
 # Xcode, sem conta de desenvolvedor, sem expirar em 7 dias. Grátis em
 # repositório público.
 #
-# `configure-pages` com enablement: true LIGA o Pages sozinho na
-# primeira execução, então não precisa mexer em Settings à mão.
+# LIGAR O PAGES É UM CLIQUE MANUAL, UMA VEZ SÓ:
+#   Settings → Pages → Build and deployment → Source: GitHub Actions
+#
+# O `enablement: true` abaixo tenta ligar sozinho, mas o token do CI não
+# tem permissão de administrador do repositório ("Resource not
+# accessible by integration") — só a dona do repositório consegue. Por
+# isso o passo é tolerante a falha: enquanto o Pages estiver desligado,
+# este workflow termina VERDE e imprime o que clicar, em vez de ficar
+# vermelho pra sempre por algo que não é um defeito do código. Depois
+# do clique, ele publica sozinho a cada push.
 
 on:
   push:
@@ -43,15 +51,41 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Ligar o Pages se ainda não estiver ligado
+        id: configurar
+        continue-on-error: true
         uses: actions/configure-pages@v5
         with:
           enablement: true
 
+      - name: Explicar o que falta, se o Pages ainda estiver desligado
+        if: steps.configurar.outcome != 'success'
+        run: |
+          echo "::notice title=GitHub Pages ainda não está ligado::\
+          Abra Settings → Pages → Source e escolha 'GitHub Actions'. \
+          Depois disso o app de iPhone publica sozinho a cada push."
+          {
+            echo "## O app de iPhone ainda não está no ar"
+            echo
+            echo "Falta um clique — e só a dona do repositório pode dar:"
+            echo
+            echo "1. **Settings** → **Pages**"
+            echo "2. Em *Build and deployment* → *Source*, escolha **GitHub Actions**"
+            echo "3. Volte na aba Actions e clique em *Re-run all jobs* aqui"
+            echo
+            echo "Depois disso vai ficar em:"
+            echo '`https://mpvaleta.github.io/vIsper/`'
+            echo
+            echo "O token do CI não tem permissão de administrador do"
+            echo "repositório, então não consegue ligar isso sozinho."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Empacotar docs/
+        if: steps.configurar.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs
 
       - name: Publicar
         id: deploy
+        if: steps.configurar.outcome == 'success'
         uses: actions/deploy-pages@v4

@@ -138,6 +138,85 @@ não bug daqui).
   também dobra acento (câmbio/cambio contam igual), pra tolerar o
   Whisper transcrever com ou sem acento.
 
+- **Configuração pessoal mora FORA do repositório**
+  (`user_settings.py` → `~/Library/Application Support/vIsper/settings.json`).
+  O repo é PÚBLICO e o `NTFY_TOPIC` é, na prática, a senha que impede
+  qualquer pessoa do mundo de disparar automação real no Mac dela. O
+  README antigo mandava colar isso no `config.py`, que é versionado —
+  um `git push` distraído publicaria a chave da casa. Hoje `config.py`
+  só tem PADRÕES e documenta cada opção; `apply_overrides(globals())`
+  na ÚLTIMA linha sobrepõe o que houver no settings.json, então nenhum
+  outro módulo precisou mudar (quem faz `from config import X` recebe o
+  valor final sem saber que houve sobreposição). Valor com tipo errado
+  é descartado SOZINHO, sem levar o arquivo junto; arquivo quebrado
+  nunca derruba o app (num `.app` não há Terminal pra mostrar o erro).
+  `check_no_secrets.py` roda no CI e falha se algum segredo voltar pro
+  `config.py`. Efeito colateral que resolve o pedido de distribuir pra
+  outras pessoas: cada uma tem a sua config, e `git pull` nunca
+  conflita com ela.
+- **O ícone da barra de menu É o estado** (`main.STATE_GLYPHS`:
+  ⏳ carregando, 🎙 parado, 🟢 escutando, 🔴 ditando, 🔵 mandou,
+  🟠 erro). Antes o título era fixo e o único retorno era notificação,
+  que some sozinha em segundos — não dava pra responder a pergunta mais
+  básica ("ele está me ouvindo agora?") sem falar uma frase de teste e
+  torcer. As cores são as MESMAS da paleta semântica do
+  `design/layouts_mockup.html`. Bolinha colorida em vez de imagem
+  template porque lê bem no tamanho da barra, funciona igual em modo
+  claro/escuro, e não vira mais um arquivo pro py2app empacotar.
+- **O modelo do Whisper carrega em THREAD, nunca no `__init__`.**
+  São ~150 MB baixados na primeira execução: no `__init__` o app ficava
+  minutos sem ícone nenhum, e qualquer falha matava o processo ANTES do
+  ícone existir. Regra geral que vale pra qualquer coisa nova no
+  `__init__`: **nada que possa demorar ou levantar exceção pode rodar
+  antes do ícone aparecer** — sem Terminal, um app que morre ali não
+  deixa rastro em lugar nenhum.
+- **Fallback pro microfone padrão do sistema**
+  (`audio_input.default_input_device()`). `guess_preferred_device()` só
+  conhece DJI e Sony; sem nenhum dos dois plugado ela devolvia None e
+  "Start listening" só mostrava um alerta — quem abrisse o app sem o
+  mic específico concluiria que ele não funciona, com o microfone do
+  MacBook ali o tempo todo.
+- **O relay do iPhone não pode abrir `claude_code`**
+  (`config.RELAY_BLOCKED_AIS`). Abrir o Claude Code roda um AppleScript
+  que abre o Terminal e DIGITA nele. Pelo mic local isso é ótimo (você
+  está na frente da máquina); vindo do ntfy, vazar o tópico deixa de
+  ser "conseguir digitar num chat" e vira execução de comando. A
+  checagem usa `CommandRouter.preview()`, que reusa o MESMO `_decide()`
+  de `route()` — um filtro com lógica paralela divergiria do roteador e
+  acabaria liberando justamente o que deveria barrar.
+- **`rumps.notification()` nunca é chamado direto — sempre por
+  `main.notify()`.** Ele exige bundle com identificador e levanta
+  `RuntimeError` rodando por `python3 main.py`, que é exatamente como o
+  primeiro teste acontece. Chamado de dentro do loop de ditado, isso
+  derrubava a thread de escuta inteira: o app parava de funcionar por
+  causa do MECANISMO DE AVISO, não do que ele avisa.
+- **`vad_filter=True` na transcrição.** Sem ele o Whisper ALUCINA em
+  cima de silêncio (costuma devolver "Legendas pela comunidade
+  Amara.org" e afins, resquício do treino em vídeo legendado). Num app
+  que escuta o tempo todo isso não é detalhe: texto inventado entra no
+  ditado como fala real, e uma alucinação que contenha a wake word ou
+  "over" dispara ação sozinha.
+- **O DMG é compilado pelo GitHub Actions num macOS de verdade**, não
+  na máquina dela. Sem isso, ter o DMG exigia venv + pip + Homebrew
+  funcionando primeiro — exatamente o atrito que o app deveria
+  eliminar. Runner macOS é grátis e ilimitado em repo público. Efeito
+  colateral igualmente importante: é o primeiro lugar onde o
+  empacotamento roda num macOS real, e o smoke test (abre o bundle,
+  confere que sobrevive 20s) pega justamente a falha silenciosa do
+  py2app quando falta lib nativa.
+- **O app de iPhone é um PWA no GitHub Pages (`docs/`), não Swift.**
+  iOS não instala app de arquivo; com conta grátis de desenvolvedor o
+  app EXPIRA EM 7 DIAS, com conta paga são US$99/ano — as duas
+  contrariam custo zero. O PWA vira ícone na tela de início pelo
+  "Adicionar à Tela de Início", não expira, e é testado num Chromium de
+  verdade a cada push (`test_pwa.js`), o que faz dele a peça MAIS
+  validada do projeto. **Armadilha do iOS que já mordeu**: o app da
+  tela de início tem armazenamento SEPARADO do Safari — o que atravessa
+  é a URL do atalho, então o fragmento `#t=<tópico>` só pode ser
+  apagado DEPOIS de já estar rodando em modo standalone, e o manifest
+  não pode definir `start_url` (com ele o iOS guardaria a URL do
+  manifest e jogaria o hash fora do mesmo jeito).
+
 ## Estado atual do código
 
 Todo o código Python foi escrito e testado neste ambiente (sandbox
@@ -348,6 +427,42 @@ Módulos de entrada alternativa (compartilham o mesmo
   etc.) ou vigia uma pasta. **Ainda não plugado em `main.py`** — sem
   menu nem forma de escolher a pasta ainda.
 
+Configuração e distribuição (o que mudou o jeito de instalar):
+- `user_settings.py` — a sobreposição pessoal descrita nas decisões
+  acima. `load_settings()`/`save_settings()`/`apply_overrides()`, com um
+  validador por chave (`VALIDATORS`). Valor inválido cai SOZINHO, sem
+  levar o arquivo junto. `settings_path()` respeita a env var
+  `VISPER_SETTINGS_PATH`, que é como os testes nunca tocam no arquivo
+  real. 21 testes.
+- `setup_visper.py` — assistente de primeira configuração. Só
+  biblioteca padrão de propósito: a primeira coisa que a pessoa faz é
+  ANTES de instalar qualquer dependência. Sorteia o tópico, e no fim
+  imprime (e copia com `pbcopy`) o link do iPhone com o tópico no
+  FRAGMENTO da URL — que navegador nenhum manda pro servidor, então
+  não aparece em log do GitHub Pages.
+- `check_no_secrets.py` — roda no CI e falha se `NTFY_TOPIC` ou
+  `PORCUPINE_ACCESS_KEY` voltarem a ter valor no `config.py`
+  versionado, ou se um `settings.json`/`device.json` for commitado. Lê
+  o `config.py` como TEXTO (ast), não importando ele — senão o valor
+  real vindo do settings.json seria confundido com o que está escrito
+  no arquivo.
+- `docs/` — o app de iPhone (PWA) publicado no GitHub Pages.
+  `index.html` é autocontido; guarda tópico/wake word/IA escolhida em
+  `localStorage`; monta `"<wake> <ia> <texto> over"` numa string só,
+  caindo no caminho abre-e-fecha-no-mesmo-trecho de `dictation.py`.
+  Envio automático com 3s de janela pra cancelar (transcrição erra;
+  mandar errado é pior que um toque a mais). Corpo de texto puro no
+  POST de propósito — requisição simples, sem preflight CORS.
+- `test_pwa.js` — 25 testes do PWA num Chromium DE VERDADE
+  (Playwright), rodando no CI. **A peça mais validada do projeto** — a
+  única testada em runtime real em vez de mocks. Achou dois defeitos
+  visuais que nenhuma leitura de código teria pego: o `hidden` não
+  esconde SVG (a regra do navegador só vale pro namespace HTML), e o
+  `viewBox` do mascote incluía a moldura inteira.
+- `.github/workflows/` — `tests.yml` (suíte Python + PWA + o guarda de
+  segredos), `build-macos.yml` (o `.app`/`.dmg` num macOS real, com
+  smoke test), `pages.yml` (publica o PWA).
+
 Ferramentas de apoio:
 - `doctor.py` — confere a config antes de rodar (dependências
   instaladas, dispositivo de entrada preferido detectável agora,
@@ -357,7 +472,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 153 testes no total. Rodar com:
+- `test_*.py` — 215 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -502,18 +617,41 @@ mudar bastante antes de virar assets de produção.
 7. `launchd/com.valeta.visper.plist` (início automático no login)
    nunca foi carregado por um `launchctl` de verdade — só validado
    como XML bem formado (`plistlib`). Ver "Próximos passos" #2.
-8. `setup.py`/`build_mac_app.sh` (o `.app`/`.dmg`) nunca rodaram num
-   Mac — só `bash -n` e `py_compile`. O risco concreto é o py2app
-   standalone não conseguir empacotar as libs nativas que o
-   faster-whisper puxa (`ctranslate2`, `onnxruntime`, `av`): elas não
-   são rastreáveis por import, por isso estão listadas à mão em
-   `PACKAGES`. Se faltar alguma, o `.app` abre e morre calado — sem
-   Terminal não aparece erro em lugar nenhum (usar
-   `log stream --predicate 'process == "vIsper"'` pra ver). Plano B
-   documentado no README: `./build_mac_app.sh --dev`.
-9. O app empacotado não é assinado por conta paga da Apple, então a
+8. O app empacotado não é assinado por conta paga da Apple, então a
    PRIMEIRA abertura exige botão direito → Abrir (Gatekeeper). Não
    tem como remover isso sem os US$99/ano.
+9. **Ligar o GitHub Pages é um clique manual** (Settings → Pages →
+   Source: GitHub Actions). O token do CI não tem permissão de
+   administrador do repositório, então `configure-pages` com
+   `enablement: true` falha com "Resource not accessible by
+   integration" — confirmado numa execução real. O `pages.yml`
+   degrada com instrução em vez de ficar vermelho pra sempre.
+10. O `vad_filter=True` foi acrescentado só no loop do Whisper contínuo
+   (`main._listen_loop_whisper`). `porcupine_session.py` e
+   `audio_file_input.py` continuam sem — nos dois o áudio já vem
+   recortado por outra coisa (detecção acústica / arquivo escolhido a
+   dedo), então a alucinação em cima de silêncio é bem menos provável;
+   e mexer neles quebraria os dublês de modelo dos testes, que fixam a
+   assinatura `transcribe(audio, language=None)`.
+11. Chunks de 4s sem sobreposição (`audio_input.AudioStream.chunks()`):
+   uma palavra cortada exatamente na fronteira entre dois chunks pode
+   não casar com nenhum gatilho. Conhecido, não corrigido — a correção
+   (janela deslizante) muda o contrato de todo mundo que consome
+   `chunks()`.
+
+### O que JÁ foi validado em máquina real (não é mais suposição)
+
+Atualizar esta lista sempre que algo sair do "nunca testado":
+
+- **O `.app`/`.dmg` compila e ABRE num macOS de verdade.** O job
+  `build-macos.yml` (runner macos-14, Apple Silicon) passou incluindo o
+  smoke test que abre o bundle e confere que ele sobrevive 20s — que é
+  exatamente a falha silenciosa do py2app quando falta lib nativa.
+  Então: a lista `PACKAGES`, o `user_settings` no bundle, e a cópia do
+  libportaudio estão corretos. O que continua não validado é o
+  comportamento COM microfone e COM permissões concedidas.
+- **O app de iPhone funciona num navegador real** (25 testes,
+  `test_pwa.js`, no CI a cada push).
 
 ## Próximos passos, em ordem de prioridade
 

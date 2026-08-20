@@ -4,10 +4,16 @@ name: Testes
 # de rede de segurança: qualquer mudança que quebre a lógica do vIsper
 # aparece aqui antes de virar problema num Mac.
 #
-# Os testes rodam SEM nenhuma dependência nativa de propósito — cada
+# Os testes rodam SEM nenhuma dependência NATIVA de propósito — cada
 # arquivo de teste dubla o que precisa de hardware (sounddevice, rumps,
-# faster_whisper). A única exceção é o numpy, usado de verdade pelos
-# testes de áudio.
+# faster_whisper). Duas bibliotecas puras continuam sendo necessárias
+# de verdade: numpy (testes de áudio) e requests (relay_listener e
+# quem o importa, incluindo main.py).
+#
+# Esta lista é curta de propósito e não é `-r requirements.txt`: manter
+# o mínimo aqui é o que garante que os dublês continuem cobrindo tudo
+# que depende de hardware. Se um teste novo passar a exigir outra
+# biblioteca, é sinal pra checar se ele não deveria estar mockando algo.
 
 on:
   push:
@@ -25,7 +31,7 @@ jobs:
           python-version: "3.11"
 
       - name: Instalar o mínimo
-        run: pip install numpy==1.26.4
+        run: pip install numpy==1.26.4 requests==2.32.3
 
       - name: Rodar os testes
         run: python -m unittest discover -p "test_*.py" -v
