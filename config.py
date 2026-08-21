@@ -80,6 +80,23 @@ CLOSE_TRIGGERS = ["câmbio", "over"]
 # antigo deixa de valer.
 NTFY_TOPIC = ""
 
+# Tolerância a erro de transcrição na ABERTURA de comando (wake word e
+# nome da IA). O Whisper erra a grafia de palavra inventada com
+# frequência — "vIsper" vira "whisper"/"vesper", "claude" falado em
+# português vira "cloud"/"clode" — e antes disso cada erro desses fazia
+# o comando falhar CALADO, como se o app fosse surdo.
+#
+# 0.72 foi MEDIDO, não chutado: pega todas as variantes reais
+# ("whisper" 0.77, "cloud" 0.73, "claudio" 0.77) e rejeita as palavras
+# de ditado mais parecidas ("dispersar" 0.67, "sempre" 0.50). Suba pra
+# 1.0 pra exigir casamento exato (desliga a tolerância); desça com
+# cuidado — abaixo de ~0.70 palavras comuns começam a colar.
+#
+# Só vale pra ABRIR. O FECHAMENTO ("câmbio"/"over"/wake word durante o
+# ditado) é sempre exato: fechar por engano manda a mensagem pela
+# metade, que é destrutivo; abrir por engano só abre uma aba à toa.
+FUZZY_MATCH_THRESHOLD = 0.72
+
 # IAs que o relay do iPhone NÃO pode abrir, mesmo com o tópico certo.
 #
 # Por que isso existe: abrir "claude_code" roda um AppleScript que abre
@@ -156,6 +173,30 @@ PREFERRED_INPUT_DEVICES = [
 DICTATION_SOUNDS_ENABLED = True
 DICTATION_OPEN_SOUND = "Pop"    # toca quando o ditado ABRE (IA lançada, começou a ouvir)
 DICTATION_SEND_SOUND = "Glass"  # toca quando o ditado FECHA com conteúdo (colou + apertou Enter)
+
+
+def transcription_hotwords() -> str:
+    """
+    O vocabulário de comando inteiro, numa string só, pro transcritor
+    PRIORIZAR essas palavras na hora de decidir o que ouviu — parâmetro
+    `hotwords` do faster-whisper (existe na 1.0.3 do requirements.txt;
+    conferido no fonte da wheel baixada da PyPI, não de memória).
+
+    É a outra metade da melhoria de detecção, complementar ao
+    FUZZY_MATCH_THRESHOLD acima: o fuzzy conserta a grafia DEPOIS que o
+    Whisper errou; isto faz o Whisper errar MENOS — com "vIsper" na
+    lista de prioridade, a chance de ele escrever "whisper" cai.
+
+    É função (não constante) de propósito: lê os valores FINAIS, já com
+    o settings.json aplicado — quem trocar a wake word ganha a
+    priorização da palavra nova sem mexer em nada.
+    """
+    words = [WAKE_WORD]
+    for triggers in AI_TRIGGERS.values():
+        words.extend(triggers)
+    words.extend(CLOSE_TRIGGERS)
+    # dict.fromkeys: dedup preservando a ordem (wake word primeiro).
+    return ", ".join(dict.fromkeys(w for w in words if w))
 
 
 # ---------------------------------------------------------------------

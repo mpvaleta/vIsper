@@ -11,6 +11,20 @@ usar:
 
 > "vIsper claude qual é a previsão do tempo **over**"
 
+## O caminho curto (se você só quer usar)
+
+1. **Mac:** baixe o DMG (aba Actions → última execução ✅ → Artifacts),
+   arraste pra Applications, **botão direito → Abrir** na primeira vez.
+2. Espere o ⏳ da barra de menu virar 🎙 (primeira vez baixa o modelo,
+   ~150 MB), clique → **Start listening**, e autorize Microfone e
+   Acessibilidade quando o macOS pedir.
+3. Fale: **"vIsper claude oi over"**. Pronto — o resto deste README é
+   detalhe.
+
+E ele tolera erro de pronúncia/transcrição: "whisper claude",
+"vIsper cloud" e parecidos funcionam igual (ver "Se ele não te
+reconhece", abaixo).
+
 ---
 
 ## Instalar no Mac
@@ -163,20 +177,35 @@ Por isso:
 
 ## Se ele não te reconhece
 
-A falha mais comum não é o app estar surdo — é a palavra "vIsper" ser
-inventada, e o transcritor escrever ela de outro jeito ("visper",
-"whisper", "vísper"). Abra o menu e veja o **Heard:**, que mostra o que
-ele realmente entendeu.
+Isso agora tem **duas camadas de defesa automáticas**, porque a palavra
+"vIsper" é inventada e o transcritor erra a grafia dela com frequência:
 
-Corrigir é escolher uma palavra REAL e distinta:
+1. **O transcritor é avisado do vocabulário.** A wake word, os nomes
+   das IAs e "câmbio"/"over" entram como prioridade na transcrição
+   (parâmetro `hotwords` do faster-whisper) — o erro acontece menos.
+2. **Quando ainda erra, o casamento tolera.** "whisper", "vesper",
+   "vísper" contam como "vIsper"; "cloud" e "clode" contam como
+   "claude". Os limiares foram medidos contra transcrições reais — e
+   contra as palavras de ditado mais parecidas, pra não colar em coisa
+   errada ("dispersar" não dispara nada).
+
+A tolerância vale **só pra abrir**. Pra fechar/mandar ("câmbio",
+"over", ou a wake word de novo) o casamento é exato de propósito:
+mandar a mensagem pela metade por um falso positivo é bem pior do que
+abrir uma aba à toa. Ajuste fino em `FUZZY_MATCH_THRESHOLD`
+(`config.py`) — 1.0 desliga a tolerância.
+
+Se mesmo assim parecer surdo: abra o menu e veja o **Heard:**, que
+mostra o que ele realmente entendeu — é a diferença entre "não me
+ouviu" e "ouviu mas escreveu diferente". Trocar a palavra de ativação
+por uma REAL ("Vésper", "Íris") ajuda mais ainda:
 
 ```bash
 python3 setup_visper.py    # ele pergunta a palavra de ativação
 ```
 
-"Vésper", "Íris" e "Sussurro" acertam muito mais que "vIsper". A
-solução definitiva é o Porcupine (mais abaixo), que reconhece o SOM da
-palavra em vez de tentar escrever ela.
+A solução definitiva continua sendo o Porcupine (mais abaixo), que
+reconhece o SOM da palavra em vez de tentar escrever ela.
 
 ---
 
@@ -228,6 +257,8 @@ estão no `config.py`:
   "however" nem "discover".
 - `PREFERRED_INPUT_DEVICES` — quais microfones são reconhecidos
   sozinhos, em ordem de prioridade
+- `FUZZY_MATCH_THRESHOLD` — quão tolerante a abertura é com erro de
+  transcrição (0.72 padrão, medido; 1.0 = só casamento exato)
 - `RELAY_BLOCKED_AIS` — o que o iPhone não pode abrir (ver Segurança)
 - `DICTATION_OPEN_SOUND` / `DICTATION_SEND_SOUND` — o som curto de
   abrir/mandar. Usa sons que já vêm no macOS (Pop, Glass, Tink, Ping…).

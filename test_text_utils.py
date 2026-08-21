@@ -1,5 +1,6 @@
 import unittest
 
+import text_utils as tu
 from text_utils import (
     contains_word,
     find_word,
@@ -243,3 +244,109 @@ class FindWordTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FindTriggerSpanTest(unittest.TestCase):
+    """
+    find_trigger_span() é a base da detecção tolerante da ABERTURA:
+    devolve o intervalo casado NO TEXTO ORIGINAL (via mapa de índices,
+    regra da casa) pra quem chama poder fatiar o leftover mesmo quando
+    o que está escrito ("cloud") difere do gatilho ("claude").
+    """
+
+    def test_exato_devolve_o_intervalo_no_original(self):
+        span = tu.find_trigger_span("vIsper claude qual é o tempo", "claude")
+        self.assertIsNotNone(span)
+        start, end, ratio = span
+        self.assertEqual("vIsper claude qual é o tempo"[start:end], "claude")
+        self.assertEqual(ratio, 1.0)
+
+    def test_intervalo_sobrevive_a_dobra_que_muda_o_comprimento(self):
+        # "…" vira "..." ao dobrar (+2). Sem o mapa de índices, o
+        # intervalo viria deslocado e o fatiamento comeria conteúdo —
+        # o mesmo bug já corrigido em text_after_word()/split_before_any().
+        texto = "Ok… vIsper claude qual é a previsão"
+        span = tu.find_trigger_span(texto, "claude")
+        start, end, _ = span
+        self.assertEqual(texto[start:end], "claude")
+        self.assertEqual(texto[end:].strip(), "qual é a previsão")
+
+    def test_pontuacao_colada_fica_fora_do_intervalo(self):
+        texto = "vIsper, claude."
+        span = tu.find_trigger_span(texto, "claude")
+        start, end, _ = span
+        self.assertEqual(texto[start:end], "claude")
+
+    def test_frase_de_duas_palavras(self):
+        texto = "vIsper claude code roda os testes"
+        span = tu.find_trigger_span(texto, "claude code")
+        start, end, _ = span
+        self.assertEqual(texto[start:end], "claude code")
+
+    def test_aproximado_pega_as_transcricoes_erradas_reais(self):
+        # As variantes que o Whisper produz DE VERDADE pra essas
+        # palavras — cada uma fazia o comando falhar calado antes.
+        for escrito, gatilho in [
+            ("whisper", "visper"),   # wake word inventada -> palavra real
+            ("vesper", "visper"),
+            ("cloud", "claude"),     # pronúncia PT de Claude
+            ("clode", "claude"),
+            ("claudio", "claude"),
+            ("chad gpt", "chat gpt"),
+        ]:
+            with self.subTest(escrito=escrito):
+                span = tu.find_trigger_span(escrito, gatilho, threshold=0.72)
+                self.assertIsNotNone(span, f"{escrito!r} devia casar com {gatilho!r}")
+
+    def test_aproximado_rejeita_palavras_de_ditado_proximas(self):
+        for escrito, gatilho in [
+            ("dispersar", "visper"),  # 0.67, a colisão mais próxima medida
+            ("sempre", "visper"),
+            ("nuvem", "claude"),
+            ("cansado", "claude"),
+        ]:
+            with self.subTest(escrito=escrito):
+                self.assertIsNone(
+                    tu.find_trigger_span(escrito, gatilho, threshold=0.72)
+                )
+
+    def test_frase_nao_casa_pelo_elo_fraco(self):
+        # Regressão real da primeira versão: a janela era comparada
+        # EMENDADA, então "claude nao" vs "claude code" dava 0.76 (o
+        # "claude" compartilhado dominava a conta) e "vIsper claude não
+        # esqueça..." abria o Claude Code, comendo o "não" do conteúdo.
+        # Palavra a palavra, "nao"×"code" reprova sozinho.
+        self.assertIsNone(
+            tu.find_trigger_span("claude não esqueça", "claude code", threshold=0.72)
+        )
+
+    def test_threshold_1_e_exato_puro(self):
+        self.assertIsNone(tu.find_trigger_span("whisper claude", "visper"))
+        self.assertIsNotNone(tu.find_trigger_span("vIsper claude", "visper"))
+
+    def test_palavra_curta_nunca_casa_aproximado(self):
+        # Com 3 letras, uma letra diferente já é um terço da palavra.
+        self.assertIsNone(tu.find_trigger_span("io", "ia", threshold=0.72))
+
+    def test_mais_a_esquerda_ganha(self):
+        texto = "cloud e depois claude"
+        span = tu.find_trigger_span(texto, "claude", threshold=0.72)
+        start, end, ratio = span
+        self.assertEqual(texto[start:end], "cloud")
+        self.assertLess(ratio, 1.0)
+
+    def test_gatilho_vazio_nao_casa(self):
+        self.assertIsNone(tu.find_trigger_span("qualquer texto", ""))
+
+
+class TrimHelpersTest(unittest.TestCase):
+    def test_trim_for_decision_dobra_e_apara_pontuacao(self):
+        self.assertEqual(tu.trim_for_decision(" — Câmbio! "), "cambio")
+        self.assertEqual(tu.trim_for_decision(" …— "), "")
+
+    def test_trim_for_content_preserva_fim_de_frase(self):
+        # Assimetria de text_after_word(): pontuação some da esquerda
+        # (artefato), fica na direita (fim de frase real da pessoa).
+        self.assertEqual(
+            tu.trim_for_content(", qual é a previsão?"), "qual é a previsão?"
+        )

@@ -79,6 +79,17 @@ def _is_positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _is_match_ratio(value):
+    """FUZZY_MATCH_THRESHOLD: fração entre 0.5 e 1.0 (1.0 = só exato).
+    Abaixo de 0.5 qualquer palavra casa com qualquer outra — isso não é
+    uma configuração, é o app abrindo IA por conta própria."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0.5 <= value <= 1.0
+    )
+
+
 def _is_str_list(value):
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
@@ -117,6 +128,7 @@ VALIDATORS = {
     "PORCUPINE_ACCESS_KEY": _is_str,
     "PORCUPINE_KEYWORD_PATH": _is_str,
     "CLOSE_TRIGGERS": _is_str_list,
+    "FUZZY_MATCH_THRESHOLD": _is_match_ratio,
     "RELAY_BLOCKED_AIS": _is_str_list,
     "RELAY_MAX_MESSAGE_CHARS": _is_positive_int,
     "AI_TRIGGERS": _is_triggers_map,

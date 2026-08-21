@@ -218,3 +218,25 @@ class ConfigIntegradoTest(SettingsTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FuzzyThresholdTest(SettingsTestCase):
+    def test_aceita_fracao_valida(self):
+        self.escrever({"FUZZY_MATCH_THRESHOLD": 0.8})
+        self.assertEqual(
+            user_settings.load_settings(), {"FUZZY_MATCH_THRESHOLD": 0.8}
+        )
+
+    def test_um_ponto_zero_desliga_a_tolerancia_e_e_valido(self):
+        self.escrever({"FUZZY_MATCH_THRESHOLD": 1.0})
+        self.assertEqual(
+            user_settings.load_settings(), {"FUZZY_MATCH_THRESHOLD": 1.0}
+        )
+
+    def test_rejeita_fora_da_faixa_booleano_e_texto(self):
+        # Abaixo de 0.5 qualquer palavra casa com qualquer outra — isso
+        # não é configuração, é o app abrindo IA por conta própria.
+        for ruim in [0.3, 1.5, True, "0.8", None]:
+            with self.subTest(valor=ruim):
+                self.escrever({"FUZZY_MATCH_THRESHOLD": ruim})
+                self.assertEqual(user_settings.load_settings(), {})

@@ -174,3 +174,79 @@ class PreviewTest(unittest.TestCase):
     def test_texto_sem_wake_word_nao_preve_nada(self):
         self.assertIsNone(self.router.preview("o claude code é bom"))
         self.assertEqual(self.abertas, [])
+
+
+class DeteccaoToleranteTest(unittest.TestCase):
+    """
+    A abertura tolera erro de transcrição (FUZZY_MATCH_THRESHOLD):
+    "vIsper" é palavra inventada e o Whisper escreve "whisper"/"vesper"
+    com frequência; "claude" falado em português vira "cloud"/"clode".
+    Antes, cada um desses erros fazia o comando falhar CALADO — o app
+    parecia surdo, que é a pior primeira impressão possível.
+    """
+
+    def setUp(self):
+        self.abertas = []
+        self.router = CommandRouter(
+            {
+                nome: (lambda n=nome: self.abertas.append(n))
+                for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+            }
+        )
+
+    def test_wake_word_transcrita_como_whisper_ainda_abre(self):
+        result = self.router.route("whisper claude qual é o tempo")
+        self.assertEqual(result, ("claude", "qual é o tempo"))
+        self.assertEqual(self.abertas, ["claude"])
+
+    def test_claude_transcrito_como_cloud_ainda_abre(self):
+        result = self.router.route("vIsper cloud me ajuda com isso")
+        self.assertEqual(result, ("claude", "me ajuda com isso"))
+        self.assertEqual(self.abertas, ["claude"])
+
+    def test_wake_word_aproximada_sozinha_abre_a_ia_padrao(self):
+        result = self.router.route("Vesper.")
+        self.assertEqual(result, ("claude", ""))
+
+    def test_parecida_no_meio_de_conversa_ambiente_nao_dispara(self):
+        # A rede de segurança que mantém o fuzzy seguro no estado
+        # ocioso: "véspera" passa no ratio contra "visper", mas o que
+        # vem depois não tem nome de IA nenhum -> None, nada abre.
+        # Conversa ambiente não costuma citar uma IA logo depois de uma
+        # palavra parecida com a wake word.
+        self.assertIsNone(self.router.route("na véspera do natal viajamos"))
+        self.assertEqual(self.abertas, [])
+
+    def test_leftover_do_casamento_aproximado_preserva_o_original(self):
+        # O leftover é fatiado pelo intervalo CASADO ("cloud"), não
+        # procurando o gatilho ("claude") de novo no original — senão
+        # nunca acharia. Capitalização/acento/pontuação intactos.
+        result = self.router.route("Whisper cloud Qual é a previsão?")
+        self.assertEqual(result, ("claude", "Qual é a previsão?"))
+
+    def test_desempate_por_comprimento_continua_com_fuzzy(self):
+        # "claude" e "claude code" na mesma posição -> o mais comprido
+        # ganha, igual ao caminho exato.
+        result = self.router.route("whisper claude code roda os testes")
+        self.assertEqual(result, ("claude_code", "roda os testes"))
+
+    def test_frase_com_nao_no_meio_nao_vira_claude_code(self):
+        # Regressão da primeira implementação do fuzzy: a janela
+        # emendada "claude nao" dava 0.76 contra "claude code" e o
+        # roteador abria o Claude Code, comendo o "não" do conteúdo.
+        result = self.router.route("vIsper claude não esqueça de confirmar!")
+        self.assertEqual(result, ("claude", "não esqueça de confirmar!"))
+
+    def test_preview_concorda_com_route_tambem_no_aproximado(self):
+        for texto in [
+            "whisper claude oi",
+            "vIsper cloud oi",
+            "vesper",
+            "na véspera do natal",
+        ]:
+            with self.subTest(texto=texto):
+                previsto = self.router.preview(texto)
+                self.abertas.clear()
+                resultado = self.router.route(texto)
+                obtido = resultado[0] if resultado else None
+                self.assertEqual(previsto, obtido)

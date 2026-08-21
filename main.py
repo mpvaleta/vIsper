@@ -163,6 +163,12 @@ class VisperApp(rumps.App):
         # Handle da thread de escuta — ver o guard em start_listening().
         self._listen_thread = None
 
+        # Vocabulário de comando que o transcritor deve PRIORIZAR —
+        # metade da melhoria de detecção (a outra é o casamento
+        # tolerante do command_router). Calculado uma vez: config já
+        # está com o settings.json aplicado aqui.
+        self._hotwords = config.transcription_hotwords()
+
         # Última coisa que o Whisper entendeu. Fica visível no menu
         # porque a falha mais confusa deste app é a wake word ser
         # transcrita errada: sem isso, "ele não me ouve" e "ele me ouviu
@@ -609,6 +615,17 @@ class VisperApp(rumps.App):
                 # fala real, e uma alucinação que contenha a wake word
                 # ou "over" dispara ação sozinha.
                 vad_filter=True,
+                # hotwords: o vocabulário de comando (wake word, nomes
+                # das IAs, câmbio/over) entra como prioridade na
+                # decodificação — "vIsper" é palavra inventada e, sem
+                # isso, o Whisper escreve "whisper"/"vesper" com
+                # frequência. Parâmetro conferido no fonte da wheel
+                # faster-whisper==1.0.3 (a versão pinada), não de
+                # memória. Cada chunk é uma chamada nova de
+                # transcribe(), então a dica vale pra TODO chunk — não
+                # só pro primeiro, como seria com initial_prompt em
+                # áudio longo.
+                hotwords=self._hotwords,
             )
             # Mesma correção de audio_file_input.py: os segmentos já
             # vêm com espaço embutido, " ".join() duplicava.

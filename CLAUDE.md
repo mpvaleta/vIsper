@@ -62,6 +62,34 @@ não bug daqui).
   segunda IA depois abria a errada ("vIsper claude e não o perplexity"
   abria o Perplexity, porque 10 letras ganhavam de 6, e ainda jogava
   fora a fala inteira junto).
+- **Detecção tolerante a erro de transcrição SÓ na abertura; o
+  fechamento é sempre exato.** Motivo da assimetria: falso positivo ao
+  ABRIR abre uma aba à toa (chato, recuperável); falso positivo ao
+  FECHAR manda a mensagem pela metade (destrutivo). E falso NEGATIVO ao
+  abrir era o pior problema real do app — "vIsper" é palavra inventada,
+  o Whisper transcreve "whisper"/"vesper", "claude" falado em PT vira
+  "cloud"/"clode", e cada erro desses fazia o comando falhar CALADO (o
+  app parecia surdo). Duas camadas, complementares:
+  (1) `hotwords` do faster-whisper (`config.transcription_hotwords()`,
+  usado em `main._listen_loop_whisper`) — o vocabulário de comando
+  entra como prioridade na decodificação, o erro acontece MENOS; o
+  parâmetro foi conferido no fonte da wheel 1.0.3 pinada, não de
+  memória. (2) casamento aproximado (`text_utils.find_trigger_span`,
+  `difflib`, limiar `config.FUZZY_MATCH_THRESHOLD = 0.72`) — MEDIDO,
+  não chutado: pega "whisper"(0.77)/"vesper"(0.83)/"cloud"(0.73)/
+  "claudio"(0.77) e rejeita as palavras de ditado mais próximas
+  ("dispersar" 0.67, "sempre" 0.50). Duas regras que mantêm isso
+  seguro e que NÃO podem ser relaxadas sem repensar tudo: (a) gatilho
+  de VÁRIAS palavras casa palavra-a-palavra pelo ELO MAIS FRACO — a
+  primeira versão comparava a janela emendada e "claude não esqueça"
+  virava "claude code" com 0.76, porque o "claude" compartilhado
+  dominava a conta; (b) wake word (mesmo aproximada) + conteúdo depois
+  mas NENHUM nome de IA continua dando None — é o que impede "véspera"
+  no meio de conversa ambiente de disparar qualquer coisa. Palavras
+  com menos de 4 letras nunca casam por aproximação. difflib (stdlib)
+  em vez de rapidfuzz de propósito: são ~10 palavras curtas por chunk,
+  performance é irrelevante, e uma dependência nativa nova arriscaria
+  o build do .app que acabou de ficar verde.
 - **iPhone precisa ser um app separado que aciona o Mac, não que
   repete a automação sozinho** — iOS não deixa um app simular teclado
   dentro de outro app (sandbox). Não existe "AppleScript do iOS".
@@ -472,7 +500,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 215 testes no total. Rodar com:
+- `test_*.py` — 244 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -626,13 +654,15 @@ mudar bastante antes de virar assets de produção.
    `enablement: true` falha com "Resource not accessible by
    integration" — confirmado numa execução real. O `pages.yml`
    degrada com instrução em vez de ficar vermelho pra sempre.
-10. O `vad_filter=True` foi acrescentado só no loop do Whisper contínuo
-   (`main._listen_loop_whisper`). `porcupine_session.py` e
-   `audio_file_input.py` continuam sem — nos dois o áudio já vem
-   recortado por outra coisa (detecção acústica / arquivo escolhido a
-   dedo), então a alucinação em cima de silêncio é bem menos provável;
-   e mexer neles quebraria os dublês de modelo dos testes, que fixam a
-   assinatura `transcribe(audio, language=None)`.
+10. `vad_filter=True` e `hotwords` foram acrescentados só no loop do
+   Whisper contínuo (`main._listen_loop_whisper`).
+   `porcupine_session.py` e `audio_file_input.py` continuam sem os
+   dois — neles o áudio já vem recortado por outra coisa (detecção
+   acústica / arquivo escolhido a dedo), então alucinação de silêncio
+   é bem menos provável e a prioridade de vocabulário importa menos
+   (o Porcupine já detectou a wake word pelo SOM); e mexer neles
+   quebraria os dublês de modelo dos testes, que fixam a assinatura
+   `transcribe(audio, language=None)`.
 11. Chunks de 4s sem sobreposição (`audio_input.AudioStream.chunks()`):
    uma palavra cortada exatamente na fronteira entre dois chunks pode
    não casar com nenhum gatilho. Conhecido, não corrigido — a correção

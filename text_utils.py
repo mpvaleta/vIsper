@@ -13,6 +13,7 @@ como PALAVRA INTEIRA evita isso.
 
 import re
 import unicodedata
+from difflib import SequenceMatcher
 
 
 def _is_edge_char(ch: str) -> bool:
@@ -204,6 +205,147 @@ def text_after_word(haystack: str, word: str) -> str:
     # _fold_with_index_map()), então fatiar o original com o índice cru
     # do match comia/deslocava caracteres do conteúdo de verdade.
     return _strip_edges(haystack[index_map[match.end()]:], right=False).rstrip()
+
+
+def _tokens_with_spans(haystack: str):
+    """
+    Quebra `haystack` em palavras, devolvendo cada uma já DOBRADA
+    (minúscula/sem acento) e aparada de pontuação nas bordas, junto com
+    o intervalo [início, fim) que ela ocupa no texto ORIGINAL.
+
+    A tradução dobrado→original usa _fold_with_index_map() — regra da
+    casa: qualquer função que ache posição no texto dobrado e fatie o
+    original TEM que passar pelo mapa, porque dobrar não preserva
+    comprimento ("…"→"...", "ﬁ"→"fi"; ver a docstring de lá, com os
+    bugs reais que isso causou).
+
+    Retorna lista de (palavra_dobrada, inicio_original, fim_original).
+    """
+    folded, index_map = _fold_with_index_map(haystack)
+    tokens = []
+    i, n = 0, len(folded)
+    while i < n:
+        while i < n and folded[i].isspace():
+            i += 1
+        j = i
+        while j < n and not folded[j].isspace():
+            j += 1
+        if j > i:
+            # Apara pontuação DENTRO do token ("claude," → "claude"),
+            # mantendo o intervalo apontando só pro miolo que sobrou.
+            a, b = i, j
+            while a < b and _is_edge_char(folded[a]):
+                a += 1
+            while b > a and _is_edge_char(folded[b - 1]):
+                b -= 1
+            if b > a:
+                tokens.append((folded[a:b], index_map[a], index_map[b]))
+        i = j
+    return tokens
+
+
+# Palavras mais curtas que isso nunca casam por aproximação — num token
+# de 3 letras, uma única letra diferente já é um terço da palavra, e a
+# chance de colisão com palavra comum do dia a dia fica alta demais.
+_MIN_FUZZY_LEN = 4
+
+
+def find_trigger_span(haystack: str, trigger: str, threshold: float = 1.0):
+    """
+    Procura `trigger` (1+ palavras) em `haystack` e devolve
+    (início, fim, ratio) — intervalo no texto ORIGINAL — ou None.
+
+    Com threshold=1.0 (padrão) o casamento é EXATO por palavra inteira,
+    como contains_word()/find_word(). Abaixo de 1.0, uma palavra
+    PARECIDA o bastante também casa (difflib.SequenceMatcher), o que
+    existe por um motivo concreto: a wake word padrão ("vIsper") é uma
+    palavra inventada e o Whisper transcreve errado com frequência —
+    "whisper" (ratio 0.77), "vesper" (0.83) —, e "claude" falado em
+    português vira "cloud"/"clode" (0.73). Antes disso, cada uma dessas
+    transcrições fazia o comando falhar SILENCIOSAMENTE: o app parecia
+    surdo, que é a pior primeira impressão possível. Os limiares foram
+    MEDIDOS (não chutados) contra variantes reais e contra as palavras
+    de ditado mais próximas — "dispersar" vs "visper" dá 0.67, então
+    0.72 separa os dois grupos com folga dos dois lados.
+
+    QUEM pode usar aproximação é decisão de quem chama, e a regra do
+    projeto é assimétrica de propósito (ver command_router/dictation):
+    ABERTURA usa fuzzy (falso positivo = abre uma aba à toa, chato mas
+    recuperável; falso negativo = app parece morto), FECHAMENTO nunca
+    usa (falso positivo = manda a mensagem pela metade, destrutivo).
+
+    Empate/ordem: devolve a ocorrência mais À ESQUERDA que atinja o
+    threshold — consistente com a regra "posição primeiro" do
+    command_router. Num mesmo ponto do texto, exato ganha de
+    aproximado (é testado antes).
+    """
+    if not trigger:
+        return None
+    trigger_words = _fold_for_match(trigger).split()
+    if not trigger_words:
+        return None
+
+    tokens = _tokens_with_spans(haystack)
+    window = len(trigger_words)
+    allow_fuzzy = threshold < 1.0
+
+    for i in range(len(tokens) - window + 1):
+        start, end = tokens[i][1], tokens[i + window - 1][2]
+        # Compara PALAVRA POR PALAVRA, e o resultado da janela é o do
+        # ELO MAIS FRACO (min), não a média nem o ratio da janela
+        # emendada. O motivo é um bug que a versão emendada tinha de
+        # verdade: em "vIsper claude não esqueça...", a janela
+        # "claude nao" comparada inteira contra "claude code" dava 0.76
+        # — o "claude" compartilhado dominava a conta e o "não" pegava
+        # carona, abrindo o Claude Code (e comendo o "não" do
+        # conteúdo). Palavra a palavra, "nao"×"code" reprova sozinho e
+        # a janela morre, como deve.
+        worst = 1.0
+        for tok, trig_word in zip(
+            (t[0] for t in tokens[i : i + window]), trigger_words
+        ):
+            if tok == trig_word:
+                continue
+            if (
+                not allow_fuzzy
+                or len(tok) < _MIN_FUZZY_LEN
+                or len(trig_word) < _MIN_FUZZY_LEN
+            ):
+                worst = 0.0
+                break
+            ratio = SequenceMatcher(None, tok, trig_word).ratio()
+            if ratio < threshold:
+                worst = 0.0
+                break
+            worst = min(worst, ratio)
+        # worst == 0.0 quer dizer "alguma palavra reprovou" (o break
+        # acima); qualquer outra coisa é uma janela válida — cada par
+        # já passou pelo threshold individualmente.
+        if worst > 0.0:
+            return start, end, worst
+    return None
+
+
+def trim_for_decision(text: str) -> str:
+    """
+    Prepara um resto de texto pra DECISÃO (nunca exibido): dobra e
+    apara espaço/pontuação das duas bordas — mesma regra de
+    split_after_word(). É o que responde "sobrou alguma coisa de
+    verdade depois da wake word?" sem que um "." ou "—" solto conte
+    como conteúdo.
+    """
+    return _strip_edges(_fold_for_match(text))
+
+
+def trim_for_content(text: str) -> str:
+    """
+    Prepara um resto de texto pra virar CONTEÚDO real de ditado:
+    preserva capitalização/acento/pontuação e apara com a MESMA
+    assimetria de text_after_word() — pontuação só na borda esquerda
+    (artefato de como a palavra anterior foi dita), espaço apenas na
+    direita (um "?" no fim é fim de frase real da pessoa, não sobra).
+    """
+    return _strip_edges(text, right=False).rstrip()
 
 
 def split_before_any(haystack: str, words) -> str:
