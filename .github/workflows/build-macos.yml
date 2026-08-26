@@ -37,18 +37,18 @@ jobs:
     name: ${{ matrix.nome }}
     runs-on: ${{ matrix.runner }}
     strategy:
-      fail-fast: false      # se um chip quebrar, ainda quero o outro
       matrix:
         include:
-          # Dois builds porque um .app compilado pra Apple Silicon não
-          # roda num Mac Intel e vice-versa. Sai mais barato entregar os
-          # dois do que descobrir a arquitetura errada depois.
+          # Só Apple Silicon. Existia um build Intel (macos-13), mas o
+          # GitHub aposentou esses runners: o job ficava 24h na fila e
+          # era cancelado sozinho, TODA vez — três execuções seguidas,
+          # zero sucesso. Não era lentidão, era um runner que não
+          # existe mais. Mac Intel (pré-2020) ainda funciona pelo
+          # caminho de desenvolvedor do README (python3 main.py, ou
+          # ./build_mac_app.sh na própria máquina).
           - runner: macos-14
             arch: AppleSilicon
             nome: Apple Silicon (M1/M2/M3/M4)
-          - runner: macos-13
-            arch: Intel
-            nome: Intel
 
     steps:
       - uses: actions/checkout@v4

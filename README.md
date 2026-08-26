@@ -36,15 +36,17 @@ código. Pra baixar:
 
 1. Vá na aba **[Actions](https://github.com/mpvaleta/vIsper/actions/workflows/build-macos.yml)**
    → clique na execução mais recente com ✅ → role até **Artifacts** no
-   fim da página, e baixe o que combina com o seu Mac:
-   - **`vIsper-AppleSilicon`** — Macs com chip M1, M2, M3 ou M4
-   - **`vIsper-Intel`** — Macs mais antigos, com processador Intel
-
-   Não sabe qual é o seu? Menu  → **Sobre este Mac** → a linha "Chip"
-   (M-alguma-coisa) ou "Processador" (Intel).
+   fim da página, e baixe **`vIsper-AppleSilicon`** (Macs com chip M1,
+   M2, M3 ou M4 — confira em menu  → **Sobre este Mac** se aparecer
+   "Chip: Apple M...").
 
    Vem num `.zip` (o GitHub sempre compacta artefato); descompacte e o
    `.dmg` está lá dentro. Precisa estar logada no GitHub pra baixar.
+
+   *Mac Intel (pré-2020)?* O GitHub aposentou os runners Intel, então
+   não há DMG pronto pra essa arquitetura — use o caminho de
+   desenvolvedor logo abaixo (funciona igual), ou rode
+   `./build_mac_app.sh` na própria máquina pra gerar o seu.
 
    > Quer a página de **Releases**, com link direto e sem login? É um
    > comando, na pasta do vIsper:
