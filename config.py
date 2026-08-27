@@ -80,19 +80,45 @@ CLOSE_TRIGGERS = ["câmbio", "over"]
 # antigo deixa de valer.
 NTFY_TOPIC = ""
 
-# Idioma que o transcritor deve assumir. `None` = detectar sozinho a
-# cada trecho de ~4s (funciona, mas Whisper é conhecido por ser pouco
-# confiável detectando idioma em ÁUDIO CURTO — com poucos segundos de
-# fala, o modelo tende a "chutar" inglês com mais frequência do que
-# deveria, mesmo ouvindo outra língua com clareza; é limitação
-# documentada do próprio modelo, não bug daqui). Se você fala
-# predominantemente um idioma, force ele aqui — pula a detecção
-# incerta por completo, então funciona melhor E mais rápido:
-#   "pt" — português
-#   "en" — inglês
-# Lista completa de códigos: https://github.com/openai/whisper#available-models-and-languages
-# `python3 setup_visper.py` pergunta isso.
-TRANSCRIPTION_LANGUAGE = None
+# Os idiomas que VOCÊ fala. O vIsper nunca vai transcrever em nada
+# fora desta lista.
+#
+# O problema que isso resolve: deixar o Whisper detectar o idioma
+# livremente a cada trecho de ~4s não funciona bem, porque detecção de
+# idioma em ÁUDIO CURTO é conhecidamente pouco confiável (limitação
+# documentada do modelo, não bug daqui). Na prática ele "chuta" inglês
+# com frequência ouvindo português — e às vezes chuta idiomas que você
+# nem fala. Como o texto sai transcrito NAQUELE idioma, o resultado
+# vira letra errada, não só rótulo errado.
+#
+# Como cada tamanho de lista se comporta:
+#   ["pt"]        -> força português; pula a detecção por completo.
+#                    Mais rápido e mais confiável — use se você dita
+#                    só num idioma.
+#   ["pt", "en"]  -> detecta, mas só ACEITA se cair em pt ou en com
+#                    confiança suficiente (ver abaixo). Se a detecção
+#                    sair da lista ou vier insegura, refaz o trecho no
+#                    último idioma que deu certo. É o que permite
+#                    alternar entre os dois sem perder confiabilidade.
+#   []            -> sem restrição nenhuma (comportamento cru do
+#                    Whisper). Só faz sentido se você fala vários
+#                    idiomas que mudam com frequência — e aí você
+#                    aceita o erro de detecção junto.
+#
+# Códigos: https://github.com/openai/whisper#available-models-and-languages
+# `python3 setup_visper.py` pergunta isso e escreve aqui pra você.
+TRANSCRIPTION_LANGUAGES = ["pt", "en"]
+
+# Confiança mínima (0..1) pra aceitar um idioma detectado quando
+# TRANSCRIPTION_LANGUAGES tem mais de um. Abaixo disso o trecho é
+# refeito no último idioma que funcionou, em vez de sair transcrito
+# num idioma escolhido no chute.
+#
+# 0.5 é deliberadamente permissivo: refazer custa uma transcrição
+# extra, então só vale a pena quando a detecção está mesmo ruim. Suba
+# (0.7~0.8) se ainda estiver saindo no idioma errado; desça se estiver
+# refazendo demais e ficando lento.
+LANGUAGE_CONFIDENCE_THRESHOLD = 0.5
 
 # Tolerância a erro de transcrição na ABERTURA de comando (wake word e
 # nome da IA). O Whisper erra a grafia de palavra inventada com

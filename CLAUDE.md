@@ -90,22 +90,35 @@ não bug daqui).
   em vez de rapidfuzz de propósito: são ~10 palavras curtas por chunk,
   performance é irrelevante, e uma dependência nativa nova arriscaria
   o build do .app que acabou de ficar verde.
-- **`TRANSCRIPTION_LANGUAGE` (padrão `None`, configurável por
-  `setup_visper.py`) força o idioma da transcrição em vez de deixar o
-  Whisper detectar sozinho.** Motivo, achado testando de verdade: com
+- **`TRANSCRIPTION_LANGUAGES` é uma LISTA de idiomas permitidos
+  (padrão `["pt", "en"]`), não um idioma único forçado.** Vem
+  direto do relato dela: "eu quero falar em portugues e inglês, e
+  aparetmente só funciona ingles". Causa real, achada testando: com
   `language=None`, os chunks de 4s (`AudioStream.chunks()`) às vezes
   são CURTOS DEMAIS pra detecção de idioma do Whisper ser confiável —
-  é limitação documentada do próprio modelo (viés conhecido pra
-  inglês em áudio curto/ambíguo), não bug daqui. A Valeta relatou "só
-  funciona em inglês" falando português; forçar `"pt"` pula essa
-  adivinhação incerta por completo. Fica configurável (não hardcoded
-  pra `"pt"`) porque forçar um idioma único tem um custo real: quem
-  alterna PT/EN na mesma sessão perde a flexibilidade do auto-detect
-  — a escolha certa depende de como CADA pessoa fala, não é universal.
-  Pra diagnosticar sem precisar adivinhar: o idioma DETECTADO
-  (`info.language`, devolvido pelo próprio `transcribe()`) agora
-  aparece no "Heard:" (`"[pt] oi tudo bem"`) — separa "o Whisper não
-  ouviu" de "ouviu certo mas cravou o idioma errado".
+  limitação documentada do próprio modelo (viés conhecido pra inglês
+  em áudio curto/ambíguo), não bug daqui. E o detalhe que torna isso
+  grave: o Whisper transcreve NO idioma que ele achou, então detecção
+  errada vira TEXTO errado, não só rótulo errado — português falado
+  sai como inglês inventado. As três formas, todas configuráveis por
+  `setup_visper.py` sem abrir arquivo `.py`:
+  - **um idioma só** (`["pt"]`) — pula a adivinhação por completo,
+    é o mais confiável de todos;
+  - **vários** (`["pt", "en"]`, o padrão) — deixa detectar, mas SÓ
+    aceita o palpite se ele estiver na lista E vier com confiança
+    `>= config.LANGUAGE_CONFIDENCE_THRESHOLD` (0.5); senão
+    RE-TRANSCREVE forçando o último idioma que passou nesse crivo
+    (`self._last_good_language`), caindo no primeiro da lista se
+    ainda não houve nenhum. Re-transcrever custa um segundo passe no
+    MESMO chunk já em memória — barato perto de mandar texto errado
+    pro chat;
+  - **lista vazia** (`[]`, "auto") — sem restrição, aceita o erro de
+    detecção junto.
+  Pra diagnosticar sem precisar adivinhar: o idioma aparece no
+  "Heard:" (`"[pt] oi tudo bem"`), e quando houve correção ele mostra
+  as duas pontas (`"[en→pt] ..."`) — separa "o Whisper não ouviu" de
+  "ouviu certo mas cravou o idioma errado" de "cravou errado e eu
+  corrigi".
 - **iPhone precisa ser um app separado que aciona o Mac, não que
   repete a automação sozinho** — iOS não deixa um app simular teclado
   dentro de outro app (sandbox). Não existe "AppleScript do iOS".
@@ -294,6 +307,38 @@ não bug daqui).
   empacotamento roda num macOS real, e o smoke test (abre o bundle,
   confere que sobrevive 20s) pega justamente a falha silenciosa do
   py2app quando falta lib nativa.
+- **No iPhone, o que dispara o envio automático é OCIOSIDADE de
+  digitação, não o fim do reconhecimento de voz.** Pedido literal
+  dela: "eu não quero ter que apertar enviar para o mac". A primeira
+  versão só mandava sozinho no `onend` do Web Speech API — e o Web
+  Speech API é justamente a peça que NÃO dá pra contar no iOS: quando
+  ele falta, `speechSupported()` desabilita o botão de microfone e
+  sobrava digitar + apertar "Send to Mac" na mão, exatamente o toque
+  que não deveria existir. Hoje qualquer evento `input` no campo (a
+  tecla de MICROFONE do teclado do próprio iPhone dispara esse evento
+  igual a digitar) arma um timer de `IDLE_MS = 2500`; parou de mexer,
+  começa a MESMA contagem de 3s com a MESMA janela de cancelamento.
+  Total: 5,5s de silêncio antes de sair. Três regras que vieram de
+  pensar nos casos ruins: (a) mexer no texto durante a contagem
+  cancela E rearma — senão "corrigi uma letra" viraria "agora tem que
+  apertar enviar na mão"; (b) cancelar DE PROPÓSITO (tocar no botão,
+  que durante a contagem vira "Tap to cancel") desarma a ociosidade
+  também, senão a contagem voltaria sozinha em 2,5s e o toque não
+  teria servido pra nada; (c) desligar o ajuste nas configurações
+  desarma o que já estava armado, não só o próximo.
+- **Bug real achado por causa disso, que vale registrar: `hidden` é
+  propriedade de `HTMLElement`, e `SVGElement` NÃO herda dela.**
+  `ring.hidden = false` (o anel de contagem é um `<svg>`) só criava
+  uma propriedade JS solta — o atributo `hidden` continuava no
+  elemento, e a regra `.countdown svg.ring[hidden] { display: none }`
+  mantinha o anel invisível DURANTE a contagem inteira. Ou seja: o
+  único sinal visual de "vai mandar, toca pra cancelar" nunca
+  apareceu. É a SEGUNDA mordida do mesmo detalhe de SVG — aquela
+  regra de CSS existe justamente porque `hidden` não esconde SVG
+  sozinho. Hoje usa `removeAttribute`/`setAttribute`, e
+  `test_pwa.js` checa a visibilidade real do anel nos dois estados.
+  Confirmado rodando no Chromium (`typeof svg.hidden === "undefined"`,
+  `'hidden' in SVGElement.prototype === false`), não de memória.
 - **O app de iPhone é um PWA no GitHub Pages (`docs/`), não Swift.**
   iOS não instala app de arquivo; com conta grátis de desenvolvedor o
   app EXPIRA EM 7 DIAS, com conta paga são US$99/ano — as duas
@@ -541,9 +586,11 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   `localStorage`; monta `"<wake> <ia> <texto> over"` numa string só,
   caindo no caminho abre-e-fecha-no-mesmo-trecho de `dictation.py`.
   Envio automático com 3s de janela pra cancelar (transcrição erra;
-  mandar errado é pior que um toque a mais). Corpo de texto puro no
-  POST de propósito — requisição simples, sem preflight CORS.
-- `test_pwa.js` — 25 testes do PWA num Chromium DE VERDADE
+  mandar errado é pior que um toque a mais). **O automático NÃO
+  depende do Web Speech API** — ver a decisão de arquitetura sobre
+  isso logo abaixo. Corpo de texto puro no POST de propósito —
+  requisição simples, sem preflight CORS.
+- `test_pwa.js` — 39 testes do PWA num Chromium DE VERDADE
   (Playwright), rodando no CI. **A peça mais validada do projeto** — a
   única testada em runtime real em vez de mocks. Achou dois defeitos
   visuais que nenhuma leitura de código teria pego: o `hidden` não
@@ -562,7 +609,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 263 testes no total. Rodar com:
+- `test_*.py` — 271 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -742,7 +789,7 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
   Então: a lista `PACKAGES`, o `user_settings` no bundle, e a cópia do
   libportaudio estão corretos. O que continua não validado é o
   comportamento COM microfone e COM permissões concedidas.
-- **O app de iPhone funciona num navegador real** (25 testes,
+- **O app de iPhone funciona num navegador real** (39 testes,
   `test_pwa.js`, no CI a cada push).
 - **`python3 main.py` roda de verdade num Mac** — a Valeta testou.
   Ícone aparece, escuta liga, permissões de Microfone/Acessibilidade

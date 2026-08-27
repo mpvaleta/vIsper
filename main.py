@@ -59,12 +59,6 @@ import config
 
 
 MODEL_SIZE = "base"  # tiny/base/small — maior = mais preciso, mais lento
-# config.TRANSCRIPTION_LANGUAGE: None deixa o Whisper detectar o idioma
-# a cada trecho (funciona, mas é pouco confiável em áudio CURTO — ver
-# comentário completo em config.py); forçar "pt" ou "en" pula essa
-# detecção incerta. Lido uma vez aqui, igual a self._hotwords — muda
-# via `python3 setup_visper.py`, não precisa editar código.
-LANGUAGE = config.TRANSCRIPTION_LANGUAGE
 
 # ---------------------------------------------------------------------
 # ESTADOS — o que aparece na barra de menu.
@@ -194,6 +188,20 @@ class VisperApp(rumps.App):
         # tolerante do command_router). Calculado uma vez: config já
         # está com o settings.json aplicado aqui.
         self._hotwords = config.transcription_hotwords()
+
+        # Idiomas que ela fala (ver config.TRANSCRIPTION_LANGUAGES).
+        # Um só = força ele e pula a detecção. Vários = detecta mas
+        # valida contra a lista. Nenhum = sem restrição.
+        self._allowed_languages = list(config.TRANSCRIPTION_LANGUAGES or [])
+        self._forced_language = (
+            self._allowed_languages[0] if len(self._allowed_languages) == 1 else None
+        )
+        # Último idioma que passou na validação — vira o idioma de
+        # reserva quando a detecção sai da lista ou vem insegura.
+        # Melhor reserva do que o primeiro da lista: pessoa não troca
+        # de idioma a cada 4 segundos, então "o que estava valendo
+        # agora há pouco" acerta bem mais que um padrão fixo.
+        self._last_good_language = None
 
         # Última coisa que o Whisper entendeu. Fica visível no menu
         # porque a falha mais confusa deste app é a wake word ser
@@ -676,47 +684,99 @@ class VisperApp(rumps.App):
         else:
             self._listen_loop_whisper(AudioStream(self.device_index))
 
+    def _transcribe(self, chunk, language):
+        """
+        Uma passada de transcrição. Devolve (texto, info).
+
+        `language=None` deixa o Whisper detectar; um código força.
+        """
+        segments, info = self.model.transcribe(
+            chunk,
+            language=language,
+            # vad_filter descarta o que não for fala antes de
+            # transcrever. Sem ele, o Whisper ALUCINA em cima de
+            # silêncio e ruído — costuma devolver frases inteiras
+            # ("Legendas pela comunidade Amara.org", "Obrigado por
+            # assistir") que vinham de vídeo legendado no treino
+            # dele. Num app que escuta o tempo todo isso não é
+            # detalhe: texto inventado entra no ditado como se fosse
+            # fala real, e uma alucinação que contenha a wake word
+            # ou "over" dispara ação sozinha.
+            vad_filter=True,
+            # hotwords: o vocabulário de comando (wake word, nomes
+            # das IAs, câmbio/over) entra como prioridade na
+            # decodificação — "vIsper" é palavra inventada e, sem
+            # isso, o Whisper escreve "whisper"/"vesper" com
+            # frequência. Parâmetro conferido no fonte da wheel
+            # faster-whisper==1.0.3 (a versão pinada), não de
+            # memória. Cada chunk é uma chamada nova de
+            # transcribe(), então a dica vale pra TODO chunk — não
+            # só pro primeiro, como seria com initial_prompt em
+            # áudio longo.
+            hotwords=self._hotwords,
+        )
+        # Mesma correção de audio_file_input.py: os segmentos já
+        # vêm com espaço embutido, " ".join() duplicava.
+        texto = re.sub(r"\s+", " ", "".join(seg.text for seg in segments)).strip()
+        return texto, info
+
+    def _transcribe_in_my_languages(self, chunk):
+        """
+        Transcreve respeitando config.TRANSCRIPTION_LANGUAGES.
+
+        Devolve (texto, rótulo_de_idioma) — o rótulo vai pro "Heard:".
+
+        O problema real que isto resolve: detecção de idioma em áudio
+        CURTO (nossos trechos são de ~4s) é conhecidamente pouco
+        confiável, e o Whisper transcreve NO idioma que ele achou. Ou
+        seja, detecção errada não produz só um rótulo errado — produz
+        TEXTO errado. Foi o que apareceu como "só funciona em inglês".
+
+        Três caminhos, por tamanho da lista:
+          - 1 idioma  -> força, nem detecta. Mais rápido e sem chute.
+          - vários    -> detecta, mas só aceita se cair na lista COM
+                         confiança; senão refaz no idioma de reserva.
+          - vazia     -> sem restrição, aceita o que vier.
+        """
+        if self._forced_language:
+            texto, _info = self._transcribe(chunk, self._forced_language)
+            return texto, self._forced_language
+
+        texto, info = self._transcribe(chunk, None)
+
+        if not self._allowed_languages:
+            return texto, info.language  # sem restrição
+
+        confiavel = info.language_probability >= config.LANGUAGE_CONFIDENCE_THRESHOLD
+        if info.language in self._allowed_languages and confiavel:
+            self._last_good_language = info.language
+            return texto, info.language
+
+        # Detecção fora da lista (ela não fala esse idioma) ou insegura
+        # demais: refazer no idioma de reserva custa uma transcrição
+        # extra, mas o texto da primeira passada estaria no idioma
+        # errado de qualquer forma — não é desperdício, é a correção.
+        reserva = self._last_good_language or self._allowed_languages[0]
+        texto, _info = self._transcribe(chunk, reserva)
+        # O rótulo mostra os DOIS: o que ele achou e o que a gente usou
+        # no lugar. Sem isso, "refez em pt" e "detectou pt de primeira"
+        # ficam indistinguíveis no "Heard:", e some a pista de que a
+        # detecção está indo mal.
+        return texto, f"{info.language}→{reserva}"
+
     def _listen_loop_whisper(self, stream):
         for chunk in stream.chunks():
             if not self.listening:
                 break
-            segments, info = self.model.transcribe(
-                chunk,
-                language=LANGUAGE,
-                # vad_filter descarta o que não for fala antes de
-                # transcrever. Sem ele, o Whisper ALUCINA em cima de
-                # silêncio e ruído — costuma devolver frases inteiras
-                # ("Legendas pela comunidade Amara.org", "Obrigado por
-                # assistir") que vinham de vídeo legendado no treino
-                # dele. Num app que escuta o tempo todo isso não é
-                # detalhe: texto inventado entra no ditado como se fosse
-                # fala real, e uma alucinação que contenha a wake word
-                # ou "over" dispara ação sozinha.
-                vad_filter=True,
-                # hotwords: o vocabulário de comando (wake word, nomes
-                # das IAs, câmbio/over) entra como prioridade na
-                # decodificação — "vIsper" é palavra inventada e, sem
-                # isso, o Whisper escreve "whisper"/"vesper" com
-                # frequência. Parâmetro conferido no fonte da wheel
-                # faster-whisper==1.0.3 (a versão pinada), não de
-                # memória. Cada chunk é uma chamada nova de
-                # transcribe(), então a dica vale pra TODO chunk — não
-                # só pro primeiro, como seria com initial_prompt em
-                # áudio longo.
-                hotwords=self._hotwords,
-            )
-            # Mesma correção de audio_file_input.py: os segmentos já
-            # vêm com espaço embutido, " ".join() duplicava.
-            text = re.sub(r"\s+", " ", "".join(seg.text for seg in segments)).strip()
-            if text:
-                # O código do idioma DETECTADO (info.language) entra
-                # junto no "Heard:" — diagnóstico direto pra "ele não
-                # entende português": se aparecer "[en]" com você
-                # falando português, o problema é a detecção de
-                # idioma em áudio curto (ver config.TRANSCRIPTION_LANGUAGE),
-                # não o app "não suportar" o idioma.
-                self._set_heard(f"[{info.language}] {text}")
-            self._on_result(self.session.handle(text))
+            texto, rotulo_idioma = self._transcribe_in_my_languages(chunk)
+            if texto:
+                # O idioma entra junto no "Heard:" — diagnóstico direto
+                # pra "ele não entende português": se aparecer "[en]"
+                # com você falando português, o problema é a detecção
+                # de idioma (ver config.TRANSCRIPTION_LANGUAGES), não o
+                # app "não suportar" o idioma.
+                self._set_heard(f"[{rotulo_idioma}] {texto}")
+            self._on_result(self.session.handle(texto))
 
     def _listen_loop_porcupine(self):
         # NUNCA TESTADO COM MIC/HARDWARE DE VERDADE — a lógica de
@@ -749,7 +809,16 @@ class VisperApp(rumps.App):
                 self.model,
                 self.session,
                 sample_rate=self.porcupine_detector.sample_rate,
-                language=LANGUAGE,
+                # Só o idioma FORÇADO (lista de um item) chega aqui.
+                # Com vários idiomas isso fica None e o Porcupine cai
+                # na detecção crua — aceitável porque neste caminho o
+                # áudio já vem recortado pela detecção acústica (é uma
+                # fala inteira, não um trecho de 4s cego), que é
+                # justamente a condição em que a detecção de idioma do
+                # Whisper funciona bem. A validação de
+                # _transcribe_in_my_languages() não se aplica aqui: o
+                # PorcupineSession tem o próprio ciclo de transcrição.
+                language=self._forced_language,
             )
             ps.run(gated_frames(), on_result=self._on_result)
         finally:

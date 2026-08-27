@@ -79,13 +79,23 @@ def _is_positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _is_lang_code_or_none(value):
-    """TRANSCRIPTION_LANGUAGE: None (detectar sozinho) ou um código
-    curto tipo "pt"/"en" — não valida contra a lista completa de
-    códigos do Whisper (mudaria a cada versão do modelo), só a FORMA."""
-    if value is None:
-        return True
-    return isinstance(value, str) and 2 <= len(value) <= 8
+def _is_lang_code_list(value):
+    """TRANSCRIPTION_LANGUAGES: lista de códigos curtos ("pt", "en").
+    Lista VAZIA é válida e significa "sem restrição". Não valida contra
+    a lista completa de códigos do Whisper (mudaria a cada versão do
+    modelo), só a FORMA."""
+    return isinstance(value, list) and all(
+        isinstance(v, str) and 2 <= len(v) <= 8 for v in value
+    )
+
+
+def _is_probability(value):
+    """LANGUAGE_CONFIDENCE_THRESHOLD: fração entre 0 e 1."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0.0 <= value <= 1.0
+    )
 
 
 def _is_match_ratio(value):
@@ -137,7 +147,8 @@ VALIDATORS = {
     "PORCUPINE_ACCESS_KEY": _is_str,
     "PORCUPINE_KEYWORD_PATH": _is_str,
     "CLOSE_TRIGGERS": _is_str_list,
-    "TRANSCRIPTION_LANGUAGE": _is_lang_code_or_none,
+    "TRANSCRIPTION_LANGUAGES": _is_lang_code_list,
+    "LANGUAGE_CONFIDENCE_THRESHOLD": _is_probability,
     "FUZZY_MATCH_THRESHOLD": _is_match_ratio,
     "RELAY_BLOCKED_AIS": _is_str_list,
     "RELAY_MAX_MESSAGE_CHARS": _is_positive_int,

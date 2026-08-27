@@ -23,3 +23,9 @@ design/vIsper.icns
 
 # Lixo do Finder.
 .DS_Store
+
+# Playwright instalado localmente só pra rodar test_pwa.js (o CI
+# instala sozinho). Não é dependência do app — o vIsper em si não
+# tem nada de Node.
+node_modules/
+package-lock.json

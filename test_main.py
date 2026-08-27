@@ -452,50 +452,162 @@ class DespachoParaThreadPrincipalTest(unittest.TestCase):
         self.assertIn("Accessibility", mensagem)
 
 
+class _FakeSegment:
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeInfo:
+    def __init__(self, language, probability=0.99):
+        self.language = language
+        self.language_probability = probability
+
+
 class IdiomaDeTranscricaoTest(unittest.TestCase):
     """
-    main.LANGUAGE vem de config.TRANSCRIPTION_LANGUAGE (None = Whisper
-    detecta sozinho a cada trecho — pouco confiável em áudio CURTO, ver
-    comentário completo em config.py). O idioma REALMENTE detectado
-    entra no "Heard:" ("[pt] oi tudo bem") — é o que separa "o app não
-    suporta português" de "o Whisper ouviu certo mas cravou o idioma
-    errado", que é o diagnóstico certo pro caso real.
+    config.TRANSCRIPTION_LANGUAGES é a resposta pra "só funciona em
+    inglês" / "quero falar português E inglês".
+
+    O ponto que torna isto uma correção de verdade e não só um rótulo:
+    o Whisper transcreve NO idioma que ele detectou, então detecção
+    errada produz TEXTO errado. Detectar mal num trecho de ~4s é
+    conhecidamente comum. Por isso, com vários idiomas permitidos, uma
+    detecção fora da lista (ou insegura) faz o trecho ser REFEITO no
+    idioma de reserva, em vez de aceitar o texto errado.
     """
 
-    class _FakeSegment:
-        def __init__(self, text):
-            self.text = text
+    def _model_devolvendo(self, respostas):
+        """respostas: lista de (texto, idioma, confiança) por chamada."""
+        model = MagicMock()
+        model.transcribe.side_effect = [
+            ([_FakeSegment(texto)], _FakeInfo(idioma, prob))
+            for texto, idioma, prob in respostas
+        ]
+        return model
 
-    class _FakeInfo:
-        def __init__(self, language):
-            self.language = language
-
-    def _run_one_chunk(self, app, texto, idioma):
-        fake_stream = MagicMock()
-        fake_stream.chunks.return_value = iter([object()])  # um chunk só
-        app.model = MagicMock()
-        app.model.transcribe.return_value = (
-            [self._FakeSegment(texto)],
-            self._FakeInfo(idioma),
-        )
+    def _um_chunk(self, app):
+        stream = MagicMock()
+        stream.chunks.return_value = iter([object()])
         with patch.object(app.session, "handle", return_value=None):
-            app._listen_loop_whisper(fake_stream)
-        return app.model.transcribe
+            app._listen_loop_whisper(stream)
 
-    def test_idioma_detectado_aparece_no_heard(self):
+    # -- um idioma só: força, nem detecta -----------------------------
+
+    def test_um_idioma_forca_e_nao_detecta(self):
         app = _build_app(load_model=True)
         app.listening = True
-        self._run_one_chunk(app, "oi tudo bem", "pt")
+        app._allowed_languages = ["pt"]
+        app._forced_language = "pt"
+        app.model = self._model_devolvendo([("oi tudo bem", "pt", 0.99)])
+
+        self._um_chunk(app)
+
+        self.assertEqual(app.model.transcribe.call_count, 1)
+        self.assertEqual(app.model.transcribe.call_args.kwargs["language"], "pt")
         self.assertEqual(app._last_heard, "[pt] oi tudo bem")
 
-    def test_hotwords_e_idioma_configurado_vao_pro_transcribe(self):
+    # -- vários idiomas: detecta, mas valida --------------------------
+
+    def test_deteccao_dentro_da_lista_e_confiante_e_aceita(self):
         app = _build_app(load_model=True)
         app.listening = True
-        transcribe = self._run_one_chunk(app, "oi", "pt")
-        _args, kwargs = transcribe.call_args
-        self.assertEqual(kwargs["language"], main.LANGUAGE)
-        self.assertEqual(kwargs["hotwords"], app._hotwords)
-        self.assertTrue(kwargs["vad_filter"])
+        app._allowed_languages = ["pt", "en"]
+        app._forced_language = None
+        app.model = self._model_devolvendo([("oi tudo bem", "pt", 0.95)])
+
+        self._um_chunk(app)
+
+        self.assertEqual(app.model.transcribe.call_count, 1, "não devia refazer")
+        self.assertIsNone(app.model.transcribe.call_args.kwargs["language"])
+        self.assertEqual(app._last_heard, "[pt] oi tudo bem")
+        self.assertEqual(app._last_good_language, "pt")
+
+    def test_deteccao_fora_da_lista_refaz_no_idioma_de_reserva(self):
+        # O caso real: ela fala português, o Whisper crava um idioma
+        # que ela nem fala, e o TEXTO sai transcrito naquele idioma.
+        # Aceitar isso é aceitar letra errada — por isso refaz.
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._allowed_languages = ["pt", "en"]
+        app._forced_language = None
+        app.model = self._model_devolvendo(
+            [("oi tud bem", "cy", 0.99), ("oi tudo bem", "pt", 0.99)]
+        )
+
+        self._um_chunk(app)
+
+        self.assertEqual(app.model.transcribe.call_count, 2)
+        # Segunda passada força o idioma de reserva.
+        self.assertEqual(
+            app.model.transcribe.call_args_list[1].kwargs["language"], "pt"
+        )
+        # O rótulo mostra os dois: o que detectou e o que usou.
+        self.assertEqual(app._last_heard, "[cy→pt] oi tudo bem")
+
+    def test_deteccao_insegura_refaz_mesmo_estando_na_lista(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._allowed_languages = ["pt", "en"]
+        app._forced_language = None
+        baixa = main.config.LANGUAGE_CONFIDENCE_THRESHOLD - 0.1
+        app.model = self._model_devolvendo(
+            [("oi", "en", baixa), ("oi tudo bem", "pt", 0.99)]
+        )
+
+        self._um_chunk(app)
+
+        self.assertEqual(app.model.transcribe.call_count, 2)
+        self.assertEqual(app._last_heard, "[en→pt] oi tudo bem")
+
+    def test_reserva_e_o_ultimo_idioma_que_deu_certo(self):
+        # Pessoa não troca de idioma a cada 4s: "o que estava valendo
+        # agora há pouco" acerta mais que o primeiro da lista.
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._allowed_languages = ["pt", "en"]
+        app._forced_language = None
+        app._last_good_language = "en"  # ela estava falando inglês
+        app.model = self._model_devolvendo(
+            [("bla", "cy", 0.99), ("how are you", "en", 0.99)]
+        )
+
+        self._um_chunk(app)
+
+        self.assertEqual(
+            app.model.transcribe.call_args_list[1].kwargs["language"], "en"
+        )
+        self.assertEqual(app._last_heard, "[cy→en] how are you")
+
+    # -- lista vazia: sem restrição -----------------------------------
+
+    def test_lista_vazia_aceita_qualquer_idioma_sem_refazer(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._allowed_languages = []
+        app._forced_language = None
+        app.model = self._model_devolvendo([("hola", "es", 0.4)])
+
+        self._um_chunk(app)
+
+        self.assertEqual(app.model.transcribe.call_count, 1)
+        self.assertEqual(app._last_heard, "[es] hola")
+
+    # -- parâmetros que valem pra toda passada ------------------------
+
+    def test_hotwords_e_vad_vao_em_todas_as_passadas(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._allowed_languages = ["pt", "en"]
+        app._forced_language = None
+        app.model = self._model_devolvendo(
+            [("bla", "cy", 0.99), ("oi", "pt", 0.99)]
+        )
+
+        self._um_chunk(app)
+
+        for chamada in app.model.transcribe.call_args_list:
+            self.assertEqual(chamada.kwargs["hotwords"], app._hotwords)
+            self.assertTrue(chamada.kwargs["vad_filter"])
 
 
 class IniciarEscutaTest(unittest.TestCase):

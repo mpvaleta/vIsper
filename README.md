@@ -140,8 +140,19 @@ caminho abaixo não custa nada, não expira, e leva 1 minuto.
 3. Abra o link **no Safari do iPhone**.
 4. Toque em **Compartilhar** → **Adicionar à Tela de Início**.
 
-Vira um ícone que abre como app. Toque no microfone, fale, e ele manda
-pro Mac — de qualquer lugar com internet, não só na Wi-Fi de casa.
+Vira um ícone que abre como app. Fale e ele manda pro Mac sozinho —
+de qualquer lugar com internet, não só na Wi-Fi de casa.
+
+**Você não precisa apertar "Send to Mac".** Assim que você para de
+falar (ou de digitar), ele espera ~2,5 segundos e começa uma contagem
+de 3 segundos — o botão vira **Tap to cancel** e um anel se fecha em
+volta dele. Não tocou em nada, foi. Isso vale pelos dois caminhos: o
+botão de microfone do app **e** a tecla de microfone do teclado do
+próprio iPhone (que é a que sempre funciona, mesmo quando o iOS não
+dá o reconhecimento de voz pro app). Continuar escrevendo cancela a
+contagem e recomeça a espera, então corrigir uma palavra não te
+obriga a apertar nada. Dá pra desligar tudo isso em **Settings** →
+*Auto-send when you stop*.
 
 > **Faça o passo 4 antes de fechar o Safari.** No iOS, o app da tela de
 > início tem armazenamento separado do Safari; o que leva sua conexão
@@ -216,19 +227,30 @@ reconhece o SOM da palavra em vez de tentar escrever ela.
 
 Sintoma comum: você fala português e o **Heard:** mostra `[en]` na
 frente — o Whisper detectou o idioma ERRADO, não é que ele não
-entenda português. Detecção automática de idioma é pouco confiável em
-trechos CURTOS de fala (limitação conhecida do modelo, não bug daqui)
-— e o vIsper escuta em blocos de ~4 segundos.
+entenda português. Detecção automática é pouco confiável em trechos
+CURTOS de fala (limitação conhecida do modelo, não bug daqui) — e o
+vIsper escuta em blocos de ~4 segundos. O problema não para no
+rótulo: o Whisper **transcreve no idioma que ele achou**, então
+detecção errada vira texto errado.
 
-Corrige forçando o idioma:
+Por isso o vIsper não deixa mais ele adivinhar à vontade: você diz
+quais idiomas VOCÊ fala, e ele nunca transcreve em nada fora dessa
+lista. O padrão já vem `pt, en`.
 
 ```bash
-python3 setup_visper.py    # pergunta "que idioma você fala mais"
+python3 setup_visper.py    # pergunta "que idioma(s) você fala"
 ```
 
-Digite `pt` ou `en`. Se você alterna entre os dois na mesma conversa,
-deixe em `auto` (o padrão) — forçar um só melhora a confiabilidade
-justamente por abrir mão dessa flexibilidade.
+- `pt` (um só) — pula a detecção por completo. **É o mais
+  confiável**, escolha esse se você dita sempre no mesmo idioma.
+- `pt, en` (o padrão) — alterna entre os dois com segurança: se o
+  palpite não estiver na sua lista, ou vier sem confiança, ele
+  **transcreve de novo** forçando o idioma que estava dando certo.
+- `auto` — sem restrição nenhuma (aceita o erro de detecção junto).
+
+Quando ele corrige um palpite, o **Heard:** mostra as duas pontas
+(`[en→pt] bom dia`) — assim dá pra ver que a correção funcionou em
+vez de ficar no escuro.
 
 ---
 
@@ -282,9 +304,12 @@ estão no `config.py`:
   sozinhos, em ordem de prioridade
 - `FUZZY_MATCH_THRESHOLD` — quão tolerante a abertura é com erro de
   transcrição (0.72 padrão, medido; 1.0 = só casamento exato)
-- `TRANSCRIPTION_LANGUAGE` — força o idioma da transcrição (`"pt"`,
-  `"en"`...) em vez de detectar sozinho a cada trecho. Padrão `None`
-  (auto). Ver "Só funciona em inglês", acima.
+- `TRANSCRIPTION_LANGUAGES` — a lista de idiomas que você fala
+  (`["pt", "en"]` por padrão). O vIsper nunca transcreve em nada fora
+  dela; lista vazia = sem restrição. Ver "Só funciona em inglês",
+  acima.
+- `LANGUAGE_CONFIDENCE_THRESHOLD` — abaixo disso o palpite de idioma
+  é descartado e o trecho é transcrito de novo (0.5 padrão)
 - `RELAY_BLOCKED_AIS` — o que o iPhone não pode abrir (ver Segurança)
 - `DICTATION_OPEN_SOUND` / `DICTATION_SEND_SOUND` — o som curto de
   abrir/mandar. Usa sons que já vêm no macOS (Pop, Glass, Tink, Ping…).
@@ -374,11 +399,11 @@ Honestidade sobre o que foi validado de verdade:
 
 | Peça | Como foi validada |
 |---|---|
-| Lógica do núcleo (roteamento, ditado, texto, config) | 215 testes automatizados |
-| App de iPhone (`docs/`) | 25 testes num navegador de verdade (Chromium), a cada push |
+| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 271 testes automatizados |
+| App de iPhone (`docs/`) | 39 testes num navegador de verdade (Chromium), a cada push |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |
-| Microfone, permissões do macOS, barra de menu | **Nunca rodou num Mac de verdade** |
+| Microfone, permissões do macOS, barra de menu | Já rodou num Mac de verdade (ícone, escuta, permissões, download do modelo). Falta uma sessão inteira de ponta a ponta sem travar |
 | Relay do ntfy | **Nunca testado contra o ntfy.sh real** (o sandbox onde foi escrito bloqueia) |
 | Porcupine com áudio real | **Nunca testado** |
 | LaunchAgent | **Nunca carregado por um launchctl de verdade** |

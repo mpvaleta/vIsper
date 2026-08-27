@@ -503,8 +503,9 @@
 
     <div class="row-toggle">
       <div class="lbl">
-        Auto-send after speaking
-        <div class="sub">Sends on its own once you stop talking. You get 3 seconds to cancel.</div>
+        Auto-send when you stop
+        <div class="sub">Works for the mic button, your keyboard's microphone key and
+        typing. You get 3 seconds to cancel.</div>
       </div>
       <div class="switch">
         <input type="checkbox" id="in-autosend" checked>
@@ -569,6 +570,12 @@
   var recog = null;
   var recording = false;
   var countdownTimer = null;
+  var idleTimer = null;
+  // Quanto tempo sem digitar/ditar antes de considerar "ela terminou".
+  // 2.5s + os 3s da contagem = 5.5s de silencio total antes de sair —
+  // folgado o bastante pra pausa de quem esta compondo a frase, curto
+  // o bastante pra continuar sendo maos-livres.
+  var IDLE_MS = 2500;
   var toastTimer = null;
 
   // ---------------- armazenamento ----------------
@@ -696,9 +703,12 @@
         (s.autosend ? " It sends by itself when you stop." : "");
     } else {
       // iOS antigo (ou navegador sem Web Speech): o teclado do proprio
-      // iPhone tem a tecla de microfone, que resolve igual.
+      // iPhone tem a tecla de microfone, que resolve igual — e o
+      // envio automatico por ociosidade cobre o resto, entao continua
+      // sem precisar apertar nada pra mandar.
       $("hint").textContent =
-        "Tap the box, then the microphone key on your keyboard.";
+        "Tap the box, then the microphone key on your keyboard." +
+        (s.autosend ? " It sends by itself when you stop." : "");
       $("btn-mic").disabled = true;
     }
   }
@@ -709,6 +719,7 @@
     if (!Rec) return;
 
     cancelCountdown();
+    cancelIdleAutoSend();
     recog = new Rec();
     recog.lang = navigator.language || "en-US";
     recog.interimResults = true;
@@ -771,12 +782,20 @@
   // 3s existe porque transcricao erra, e mandar coisa errada pro chat e
   // pior do que um toque a mais.
   function startCountdown() {
+    cancelIdleAutoSend();
     var SEGUNDOS = 3;
     var ring = document.querySelector(".ring");
     var path = $("ring-path");
     var circ = 2 * Math.PI * 46;
 
-    ring.hidden = false;
+    // `elemento.hidden = false` NAO funciona aqui: `hidden` e uma
+    // propriedade de HTMLElement, e SVGElement nao herda dela
+    // (conferido rodando no Chromium: `typeof svg.hidden` da
+    // "undefined", e atribuir nao mexe no atributo). O anel ficava
+    // escondido pela regra `svg.ring[hidden]` do CSS mesmo durante a
+    // contagem — segunda mordida do MESMO detalhe de SVG que aquela
+    // regra existe pra contornar. Atributo, entao, nao propriedade.
+    ring.removeAttribute("hidden");
     path.style.strokeDasharray = circ;
     path.style.strokeDashoffset = 0;
 
@@ -797,11 +816,43 @@
     }, 60);
   }
 
+  // ---------------- envio automatico tambem sem Web Speech ----------------
+  // O ditado do proprio TECLADO do iPhone (a tecla de microfone) e o
+  // caminho que sempre funciona — o Web Speech API do navegador nao e
+  // confiavel no iOS, e some de vez quando o app roda a partir da tela
+  // de inicio. Nesse caso o botao de microfone daqui fica desabilitado
+  // e sobraria digitar + apertar "Send to Mac" na mao, que e
+  // exatamente o toque a mais que nao deveria existir.
+  //
+  // Solucao: qualquer entrada de texto (ditada pelo teclado OU
+  // digitada) arma um temporizador de ociosidade. Parou de falar,
+  // passou o tempo, comeca a contagem de envio — o mesmo caminho e a
+  // mesma janela de cancelamento do fluxo com Web Speech.
+  function armIdleAutoSend() {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+    if (!s.autosend) return;
+    if (!$("text").value.trim()) return;
+    idleTimer = setTimeout(function () {
+      idleTimer = null;
+      // Nao atropela um ditado em andamento: com Web Speech ativo,
+      // quem dispara a contagem e o onend do reconhecimento.
+      if (recording) return;
+      if (!$("text").value.trim()) return;
+      startCountdown();
+    }, IDLE_MS);
+  }
+
+  function cancelIdleAutoSend() {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+
   function cancelCountdown() {
     if (!countdownTimer) return false;
     clearInterval(countdownTimer);
     countdownTimer = null;
-    document.querySelector(".ring").hidden = true;
+    document.querySelector(".ring").setAttribute("hidden", "");
     $("send-label").textContent = "Send to Mac";
     setStatus("idle", "Ready");
     return true;
@@ -816,6 +867,7 @@
   }
 
   function send() {
+    cancelIdleAutoSend();
     var texto = $("text").value.trim();
     if (!texto) { toast("Nothing to send yet.", "error"); return; }
     if (!s.topic) { showScreen("setup"); return; }
@@ -880,6 +932,9 @@
     s.keep = $("in-keep").checked;
     save();
     updateHint();
+    // Desligar o automatico tem que valer AGORA, nao so no proximo
+    // ditado: um temporizador ja armado mandaria assim mesmo.
+    if (!s.autosend) { cancelIdleAutoSend(); cancelCountdown(); }
 
     if (!s.topic) { toast("Add your topic to connect.", "error"); return; }
     $("install-tip").hidden = isStandalone();
@@ -893,13 +948,22 @@
   $("btn-mic").addEventListener("click", startDictation);
   $("btn-send").addEventListener("click", function () {
     // Durante a contagem, o mesmo botao vira "cancelar" — um alvo so
-    // pra acertar sem olhar.
-    if (cancelCountdown()) return;
+    // pra acertar sem olhar. Cancelar de proposito desarma tambem a
+    // ociosidade: senao a contagem voltaria sozinha em 2,5s e o toque
+    // de cancelar nao teria servido pra nada.
+    if (cancelCountdown()) { cancelIdleAutoSend(); return; }
+    cancelIdleAutoSend();
     send();
   });
-  // Digitar cancela o envio automatico: sinal claro de que ela quer
-  // corrigir antes de mandar.
-  $("text").addEventListener("input", cancelCountdown);
+  // Mexer no texto durante a contagem cancela o envio: sinal claro de
+  // que ela quer corrigir antes de mandar. Mas ja rearma o
+  // temporizador de ociosidade — parar de mexer volta a mandar
+  // sozinho, senao "corrigi uma letra" viraria "agora tem que apertar
+  // enviar na mao".
+  $("text").addEventListener("input", function () {
+    cancelCountdown();
+    armIdleAutoSend();
+  });
 
   readHash();
   buildAiGrid();
