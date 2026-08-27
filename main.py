@@ -151,8 +151,14 @@ def _elide(linha, limite=HISTORY_LINE_MAX):
     # Sobra mais pro começo: é onde está o horário, o marcador e a wake
     # word. O fim guarda só o suficiente pra mostrar como a frase
     # terminou (o gatilho de fechamento mora ali).
-    fim = 40
-    inicio = limite - fim - 3
+    #
+    # Os limites são calculados a partir de `limite` em vez de fixos
+    # porque um `fim` fixo maior que o próprio limite deixaria `inicio`
+    # NEGATIVO — e aí `linha[:inicio]` cortaria pelo fim em vez de
+    # truncar, devolvendo em silêncio uma linha errada e mais comprida
+    # que o pedido, em vez de dar erro.
+    fim = min(40, max(1, (limite - 3) // 2))
+    inicio = max(1, limite - fim - 3)
     return f"{linha[:inicio]}...{linha[-fim:]}"
 
 

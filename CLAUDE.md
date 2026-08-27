@@ -251,7 +251,7 @@ não bug daqui).
   `AppHelper.callAfter` — a regra da thread principal vale pra mutação
   de UI, e aqui não há nenhuma. Trecho silencioso não entra (senão o
   silêncio consumiria as 25 linhas e empurraria pra fora justamente o
-  comando que falhou). 10 testes.
+  comando que falhou). 11 testes.
 - **Toda string que `DictationSession.handle()` devolve é UI de
   produto, então está em INGLÊS.** Elas iam direto pro `notify()` (uma
   notificação do macOS — interface, não log interno) e agora aparecem
@@ -625,7 +625,7 @@ Módulos principais (mic local, sempre ativos):
   timer relê `_current_state` na hora de voltar em vez de capturar o
   estado de antes: entre o flash e o disparo dá tempo de parar a
   escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
-  desfeito por um timer velho. 79 testes
+  desfeito por um timer velho. 80 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -720,7 +720,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 318 testes no total. Rodar com:
+- `test_*.py` — 319 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que

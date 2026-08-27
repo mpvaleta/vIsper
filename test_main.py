@@ -1068,6 +1068,15 @@ class HistoricoDeAtividadeTest(unittest.TestCase):
         linha = "09:41:58  heard  vIsper claude"
         self.assertEqual(main._elide(linha), linha)
 
+    def test_encurtar_respeita_o_limite_por_menor_que_ele_seja(self):
+        # Um "fim" fixo maior que o limite deixaria o início NEGATIVO, e
+        # aí a fatia cortaria pelo fim em vez de truncar — devolvendo em
+        # silêncio uma linha errada e MAIS comprida que a pedida.
+        longa = "x" * 500
+        for limite in (5, 10, 30, 43, 110, 400):
+            with self.subTest(limite=limite):
+                self.assertLessEqual(len(main._elide(longa, limite)), limite)
+
     def test_a_decisao_entra_junto_com_o_que_foi_ouvido(self):
         # As duas metades importam separadas: a falha mais comum é elas
         # não combinarem (ouviu certo, decidiu errado — ou nem ouviu).
