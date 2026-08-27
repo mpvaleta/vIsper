@@ -27,16 +27,39 @@ from unittest.mock import MagicMock, patch
 # @rumps.clicked rodam na definição da classe, não dá pra adiar).
 # ----------------------------------------------------------------------
 class FakeMenuItem:
+    """
+    Imita o rumps.MenuItem real com uma peculiaridade de TIMING que
+    mordeu de verdade: o NSMenu interno do submenu (`_menu` no rumps
+    real) só é criado no primeiro `.add()` — antes disso é `None`, e
+    `.clear()` (que chama `self._menu.removeAllItems()`) explode com
+    AttributeError.
+
+    A primeira versão deste dublê não reproduzia isso (`clear()` só
+    fazia `self.items = []`, incondicional) — por isso os 244 testes
+    passavam com main.py quebrado: main._rebuild_mic_menu() chamava
+    `.clear()` ANTES de qualquer `.add()` na primeiríssima chamada
+    (vinda do __init__), e isso só apareceu rodando num Mac de
+    verdade. Modelar a peculiaridade aqui é o que faz esse bug — e
+    qualquer regressão dele — aparecer de novo em CI, sem precisar de
+    hardware real.
+    """
+
     def __init__(self, title, callback=None):
         self.title = title
         self.callback = callback
         self.state = 0
         self.items = []
+        self._menu_created = False
 
     def clear(self):
+        if not self._menu_created:
+            raise AttributeError(
+                "'NoneType' object has no attribute 'removeAllItems'"
+            )
         self.items = []
 
     def add(self, item):
+        self._menu_created = True
         self.items.append(item)
 
 
@@ -429,6 +452,33 @@ class ErroDePermissaoTest(unittest.TestCase):
 
 
 class MenuDeMicrofoneTest(unittest.TestCase):
+    def test_primeira_construcao_nao_quebra_no_clear(self):
+        # Regressão de um bug real, encontrado rodando num Mac de
+        # verdade: main._rebuild_mic_menu() chamava mic_menu.clear()
+        # incondicionalmente, e o rumps só cria o NSMenu interno do
+        # submenu no primeiro .add() — chamar .clear() ANTES disso
+        # (exatamente o caso da chamada vinda do __init__, a
+        # primeiríssima) levantava AttributeError e derrubava o app
+        # antes do ícone existir. _build_app() já dispara essa
+        # primeira chamada sozinho; não pode levantar nada.
+        app = _build_app(devices=[(0, "DJI Mic")])
+        titulos = [item.title for item in app.mic_menu.items]
+        self.assertIn("Detect automatically", titulos)
+        self.assertIn("DJI Mic", titulos)
+
+    def test_reconstrucoes_seguidas_tambem_nao_quebram(self):
+        # A partir da segunda vez, .clear() TEM que ser chamado de
+        # verdade (senão dispositivo desconectado continuaria
+        # aparecendo no menu) — cobre que o guard não desliga o clear
+        # pra sempre, só pula a primeiríssima chamada.
+        app = _build_app(devices=[(0, "DJI Mic")])
+        with patch("main.list_input_devices", return_value=[(0, "DJI Mic")]):
+            app._rebuild_mic_menu()
+            app._rebuild_mic_menu()
+            app._rebuild_mic_menu()
+        titulos = [item.title for item in app.mic_menu.items]
+        self.assertEqual(titulos, ["Detect automatically", "DJI Mic"])
+
     def test_checkmark_marca_o_dispositivo_salvo_logo_no_primeiro_menu(self):
         # O checkmark compara por NOME, não índice: logo depois de
         # carregar a escolha salva o índice ainda é None.

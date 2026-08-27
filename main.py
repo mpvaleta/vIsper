@@ -178,6 +178,12 @@ class VisperApp(rumps.App):
         self._last_heard = ""
 
         self.mic_menu = rumps.MenuItem("Microphone")
+        # Ver o guard em _rebuild_mic_menu(): o rumps só cria o NSMenu
+        # interno do submenu no primeiro .add() — antes disso,
+        # MenuItem.clear() explode tentando limpar um menu que ainda
+        # não existe. Essa flag é o que diferencia "primeira vez" de
+        # "reconstruindo".
+        self._mic_menu_populated = False
         self.heard_item = rumps.MenuItem("Heard: —", callback=None)
         self.menu = [
             self.heard_item,
@@ -273,13 +279,21 @@ class VisperApp(rumps.App):
     # Seleção de microfone — automática (DJI > fone Bluetooth > padrão
     # do sistema, ver config.PREFERRED_INPUT_DEVICES) ou manual.
     #
-    # NUNCA TESTADO num Mac de verdade, como o resto deste arquivo: a
-    # API de submenu dinâmico do rumps usada abaixo (MenuItem.clear()/
+    # A API de submenu dinâmico do rumps usada abaixo (MenuItem.clear()/
     # .add(), estado de checkmark via .state, título mutável via
     # .title) foi conferida linha a linha contra o SOURCE real do
     # pacote (rumps==0.4.0, baixado da PyPI — não só documentação nem
-    # de memória), mas isso não substitui ver o AppKit/NSMenu de
-    # verdade renderizar o menu.
+    # de memória). Mas ISSO NÃO PEGOU um detalhe de TIMING que só um
+    # Mac de verdade revelou: MenuItem.clear() chama
+    # `self._menu.removeAllItems()`, e `self._menu` (o NSMenu do
+    # submenu) só é criado dentro do rumps na hora do PRIMEIRO
+    # `.add()` — antes disso ele é `None`. Chamar `.clear()` num
+    # MenuItem que nunca recebeu um `.add()` (exatamente o caso da
+    # primeiríssima chamada, vinda do `__init__`) levantava
+    # `AttributeError: 'NoneType' object has no attribute
+    # 'removeAllItems'` e derrubava o app ANTES do ícone existir — a
+    # categoria de bug mais grave que existe aqui, porque sem Terminal
+    # não sobra rastro nenhum. Confirmado rodando de verdade.
     # ------------------------------------------------------------------
 
     def _rebuild_mic_menu(self):
@@ -288,11 +302,16 @@ class VisperApp(rumps.App):
         pode ter mudado (escolha manual, voltou pro automático, ou
         logo antes de tentar escutar), pra refletir fone Bluetooth
         ligado/desligado depois que o app já abriu."""
-        self.mic_menu.clear()
+        if self._mic_menu_populated:
+            self.mic_menu.clear()
 
         auto_item = rumps.MenuItem("Detect automatically", callback=self._pick_auto)
         auto_item.state = not self.device_manual
         self.mic_menu.add(auto_item)
+        # A partir daqui o NSMenu interno já existe (foi criado por
+        # esse .add() de cima) — chamadas futuras a _rebuild_mic_menu()
+        # já podem chamar .clear() com segurança.
+        self._mic_menu_populated = True
 
         # label_devices() desambigua o RÓTULO exibido quando dois
         # dispositivos têm o MESMO nome — sem isso, rumps (que indexa
