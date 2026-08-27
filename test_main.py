@@ -1085,6 +1085,15 @@ class HistoricoDeAtividadeTest(unittest.TestCase):
         self.assertTrue(any("trecho 64" in l for l in app._history))
         self.assertFalse(any("trecho 0 " in l or l.endswith("trecho 0") for l in app._history))
 
+    def test_o_item_existe_no_menu(self):
+        # O handler pode estar perfeito e o item não aparecer: o rumps
+        # liga @rumps.clicked ao item pelo TÍTULO, então uma diferença
+        # de um caractere ("..." em vez de "…") deixa o menu sem o item
+        # e sem erro nenhum.
+        app = _build_app()
+        titulos = [item for item in app.menu if isinstance(item, str)]
+        self.assertIn("Recent activity…", titulos)
+
     def test_o_menu_mostra_as_linhas_guardadas(self):
         app = _build_app(load_model=True)
         app._set_heard("[pt] vIsper claude")
