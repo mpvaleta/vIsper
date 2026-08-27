@@ -219,6 +219,46 @@ não bug daqui).
   erro de transcrição, mesma regra do fechamento e pelo mesmo motivo:
   os dois desfechos são irreversíveis.
 
+- **"Recent activity…": as últimas 40 linhas de "ouvi X / decidi Y",
+  só na MEMÓRIA.** O "Heard:" do menu responde "ele está me ouvindo
+  agora?", mas não responde a pergunta que aparece de verdade num teste
+  real: "falei o comando faz 30 segundos e não aconteceu nada — o que
+  ele entendeu?". Quando ela abre o menu pra olhar, o trecho que
+  interessa já foi sobrescrito (chega um novo a cada ~4s) e cortado em
+  45 caracteres — justamente o fim da frase, que é onde mora o gatilho
+  de fechamento. E o outro retorno, `notify()`, some em segundos e é
+  no-op rodando por `python3 main.py`. Ou seja: no momento do
+  diagnóstico não sobrava evidência nenhuma — foi exatamente a situação
+  que produziu "nao funciou o comando de voz" sem mais detalhe, e
+  custou uma ida e volta inteira pra descobrir a causa. Duas metades
+  são guardadas SEPARADAS, o que foi OUVIDO e o que foi DECIDIDO,
+  porque a falha mais comum é as duas não combinarem (ouviu certo e
+  roteou errado, ou não ouviu). **Nunca em disco, de propósito**: o app
+  escuta o tempo todo, então gravar transcrição em arquivo seria uma
+  mudança de privacidade que ninguém pediu — e é desnecessária, já que
+  a dúvida é sempre sobre o passado recente. `deque(maxlen=...)` sem
+  lock: append/list são atômicos no CPython, o pior caso é uma linha
+  fora de ordem (irrelevante pra diagnóstico) e segurar lock dentro do
+  laço de transcrição seria pior. `_log_activity()` NÃO passa por
+  `AppHelper.callAfter` — a regra da thread principal vale pra mutação
+  de UI, e aqui não há nenhuma. Trecho silencioso não entra (senão o
+  silêncio consumiria as 40 linhas e empurraria pra fora justamente o
+  comando que falhou). 7 testes.
+- **Toda string que `DictationSession.handle()` devolve é UI de
+  produto, então está em INGLÊS.** Elas iam direto pro `notify()` (uma
+  notificação do macOS — interface, não log interno) e agora aparecem
+  também em "Recent activity…", mas estavam em português: "abriu
+  claude — ouvindo ditado", "ditando…", "mandou: …". Contrariava a
+  decisão de UI em inglês registrada aqui, e era o único lugar do app
+  onde isso ainda acontecia. A tradução consertou junto uma ambiguidade
+  real criada quando "vIsper, cancela" foi acrescentado: DOIS desfechos
+  diferentes diziam "cancelado" — o cancelamento de verdade e o
+  fechamento sem nada no buffer. Hoje são `"cancelled — …"` e
+  `"nothing to send — the dictation was empty"`, que é a diferença que
+  importa (um jogou fora o que você ditou; o outro não tinha nada pra
+  jogar). Os marcadores dos testes (`"abriu_claude"`, `"mandou_enter"`)
+  continuam em português de propósito — são fixture de teste, não UI.
+
 - **Configuração pessoal mora FORA do repositório**
   (`user_settings.py` → `~/Library/Application Support/vIsper/settings.json`).
   O repo é PÚBLICO e o `NTFY_TOPIC` é, na prática, a senha que impede
@@ -525,7 +565,7 @@ Módulos principais (mic local, sempre ativos):
   `main._listen_loop_safe` e avisado por notificação. `play_sound()` é
   a exceção de propósito: usa `Popen` (não-blocking) e ENGOLE falha —
   é earcon (`config.DICTATION_OPEN_SOUND`/`DICTATION_SEND_SOUND`), não
-  pode travar o loop de ditado nem parecer que a ação real falhou. 12
+  pode travar o loop de ditado nem parecer que a ação real falhou. 18
   testes (`test_actions.py`, mockando `subprocess.run`/`Popen` —
   primeira cobertura deste arquivo).
 - `main.py` — o app de barra de menu (rumps). Escolhe automaticamente
@@ -566,7 +606,10 @@ Módulos principais (mic local, sempre ativos):
   Idioma vale NA HORA (`_apply_languages()`, chamado tanto pelo
   `__init__` quanto pelo menu — as três derivadas mudam juntas); wake
   word exige reabrir, porque `dictation.py`/`command_router.py` leem
-  `WAKE_WORD` uma vez na importação. O estado "mandou" é um
+  `WAKE_WORD` uma vez na importação. **"Recent activity…"** mostra as
+  últimas 40 linhas de "ouvi X / decidi Y" (`_log_activity()`,
+  `_history`) — é a ferramenta de diagnóstico do teste manual, ver a
+  decisão sobre ela acima. O estado "mandou" é um
   FLASH (`_flash_state`, ~2,5s) e não um estado fixo: mandar é um
   evento e a escuta continua, então o azul ficava respondendo ERRADO
   a única pergunta que o ícone existe pra responder ("ele está me
@@ -574,7 +617,7 @@ Módulos principais (mic local, sempre ativos):
   timer relê `_current_state` na hora de voltar em vez de capturar o
   estado de antes: entre o flash e o disparo dá tempo de parar a
   escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
-  desfeito por um timer velho. 59 testes
+  desfeito por um timer velho. 76 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -628,7 +671,7 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   validador por chave (`VALIDATORS`). Valor inválido cai SOZINHO, sem
   levar o arquivo junto. `settings_path()` respeita a env var
   `VISPER_SETTINGS_PATH`, que é como os testes nunca tocam no arquivo
-  real. 21 testes.
+  real. 30 testes.
 - `setup_visper.py` — assistente de primeira configuração. Só
   biblioteca padrão de propósito: a primeira coisa que a pessoa faz é
   ANTES de instalar qualquer dependência. Sorteia o tópico, e no fim
@@ -669,7 +712,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 308 testes no total. Rodar com:
+- `test_*.py` — 315 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -899,6 +942,13 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
    - **no iPhone**: ditar pela tecla de microfone do TECLADO (não pelo
      botão do app) e não encostar em mais nada — tem que mandar
      sozinho depois de uns segundos.
+   - **"Recent activity…"** é o que usar quando algo NÃO funcionar:
+     em vez de tentar de novo e torcer, abrir ali e comparar as duas
+     colunas — se o `heard` mostrar a frase certa mas não houver `→`
+     nenhum, o problema é o casamento do gatilho; se o `heard` já vier
+     torto, é transcrição (ou idioma); se não houver linha nenhuma, o
+     áudio não está chegando. Vale mandar print disso junto de
+     qualquer relato de bug — é o que faltou da última vez.
 2. Depois do item 1 validado manualmente por uns dias: configurar o
    LaunchAgent (`launchd/com.valeta.visper.plist`, ver README) —
    confirmar que o ícone aparece sozinho no login, que "Sair" não

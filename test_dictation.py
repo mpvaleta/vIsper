@@ -35,7 +35,7 @@ class DictationSessionTest(unittest.TestCase):
         result = session.handle("vIsper claude")
         self.assertTrue(session.dictating)
         self.assertIn("abriu_claude", calls)
-        self.assertIn("abriu claude", result)
+        self.assertIn("opened claude", result)
 
     def test_conteudo_vai_pro_buffer_sem_mandar_ainda(self):
         calls = []
@@ -44,7 +44,7 @@ class DictationSessionTest(unittest.TestCase):
         result = session.handle("isso é o que eu quero ditar")
         self.assertTrue(session.dictating)
         self.assertNotIn("mandou_enter", calls)
-        self.assertEqual(result, "ditando…")
+        self.assertEqual(result, "dictating…")
 
     def test_fecha_com_a_wake_word_de_novo(self):
         calls = []
@@ -93,7 +93,7 @@ class DictationSessionTest(unittest.TestCase):
         result = session.handle("over")
         self.assertFalse(session.dictating)
         self.assertNotIn("mandou_enter", calls)
-        self.assertEqual(result, "cancelado (nada foi ditado)")
+        self.assertEqual(result, "nothing to send — the dictation was empty")
 
     def test_texto_sem_wake_word_enquanto_ocioso_nao_faz_nada(self):
         calls = []
@@ -115,7 +115,7 @@ class DictationSessionTest(unittest.TestCase):
         self.assertFalse(session.dictating)
         self.assertIn(("colou", "and that is the final summary"), calls)
         self.assertIn("mandou_enter", calls)
-        self.assertTrue(result.startswith("mandou:"))
+        self.assertTrue(result.startswith("sent:"))
 
     def test_conteudo_colado_com_cambio_preserva_acento_original(self):
         calls = []
@@ -206,8 +206,8 @@ class DictationSessionTest(unittest.TestCase):
         self.assertFalse(session.dictating, "o 'over' no mesmo trecho tinha que fechar")
         self.assertIn(("colou", "qual é a previsão do tempo"), calls)
         self.assertIn("mandou_enter", calls)
-        self.assertIn("abriu claude", result)
-        self.assertIn("mandou:", result)
+        self.assertIn("opened claude", result)
+        self.assertIn("sent:", result)
 
     def test_abrir_e_fechar_no_mesmo_trecho_toca_os_dois_earcons(self):
         calls = []
@@ -237,7 +237,7 @@ class DictationSessionTest(unittest.TestCase):
         session.handle("vIsper claude")
         result = session.handle("vIsper")
         self.assertNotIn("mandou_enter", calls)
-        self.assertEqual(result, "cancelado (nada foi ditado)")
+        self.assertEqual(result, "nothing to send — the dictation was empty")
 
 
 if __name__ == "__main__":
@@ -280,7 +280,7 @@ class CancelamentoTest(unittest.TestCase):
         self.assertEqual(session.buffer, [])
         self.assertNotIn("mandou_enter", calls)
         self.assertFalse(any(isinstance(c, tuple) for c in calls))
-        self.assertIn("cancelado", resultado)
+        self.assertIn("cancelled", resultado)
 
     def test_cancelar_volta_pro_ocioso_e_deixa_ditar_de_novo(self):
         calls = []
@@ -310,7 +310,7 @@ class CancelamentoTest(unittest.TestCase):
         session.handle("vIsper claude")
         resultado = session.handle("vIsper cancela")
         self.assertFalse(session.dictating)
-        self.assertIn("cancelado", resultado)
+        self.assertIn("cancelled", resultado)
         # Feedback de "não tinha nada mesmo" também é feedback: sem ele
         # dá pra achar que o comando não foi ouvido.
         self.assertIn("som_cancelou", calls)
@@ -356,7 +356,7 @@ class CancelamentoTest(unittest.TestCase):
         self.assertIn("abriu_claude", calls)
         self.assertFalse(session.dictating)
         self.assertNotIn("mandou_enter", calls)
-        self.assertIn("cancelado", resultado)
+        self.assertIn("cancelled", resultado)
 
     def test_variacoes_de_pontuacao_e_acento_da_transcricao(self):
         # O Whisper transcreve com vírgula/ponto e com ou sem
@@ -411,7 +411,7 @@ class AberturaToleranteTest(unittest.TestCase):
         session.dictating = True
 
         resultado = session.handle("o modelo whisper é o que transcreve")
-        self.assertEqual(resultado, "ditando…")
+        self.assertEqual(resultado, "dictating…")
         self.assertTrue(session.dictating)
 
         session.handle("over")

@@ -136,7 +136,7 @@ class DictationSession:
             self.buffer = []
             if self.on_open:
                 self.on_open()
-            opened = f"abriu {ai_name} — ouvindo ditado"
+            opened = f"opened {ai_name} — listening for dictation"
             if not leftover:
                 return opened
 
@@ -179,7 +179,7 @@ class DictationSession:
             return self._close(text)
 
         self.buffer.append(text)
-        return "ditando…"
+        return "dictating…"
 
     def _cancel(self):
         """Joga o ditado fora sem colar nada. Nenhuma ação de verdade
@@ -190,8 +190,8 @@ class DictationSession:
         if self.on_cancel:
             self.on_cancel()
         if not perdido:
-            return "cancelado (não havia nada ditado)"
-        return f"cancelado — {perdido} caractere(s) descartados, nada foi mandado"
+            return "cancelled — nothing had been dictated"
+        return f"cancelled — {perdido} character(s) discarded, nothing was sent"
 
     def _close(self, text: str):
         """
@@ -214,10 +214,10 @@ class DictationSession:
         self.dictating = False
         self.buffer = []
         if not full_text:
-            return "cancelado (nada foi ditado)"
+            return "nothing to send — the dictation was empty"
 
         self.paste_action(full_text)
         self.send_action()
         if self.on_send:
             self.on_send()
-        return "mandou: " + full_text[:60]
+        return "sent: " + full_text[:60]

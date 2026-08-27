@@ -103,6 +103,32 @@ quase sempre ele ouviu, só que transcreveu a palavra de ativação de
 outro jeito, ou detectou o idioma errado (ver "Se ele não te
 reconhece", abaixo).
 
+E logo abaixo, **Recent activity…** — as últimas 40 linhas de *o que
+ele ouviu* e *o que ele decidiu fazer*, com horário. O **Heard:** só
+guarda a ÚLTIMA frase e é substituído a cada poucos segundos, então
+quando você abre o menu pra investigar, o trecho que interessa já foi
+embora. Aqui ele não vai:
+
+```
+09:41:58  heard  [pt] vIsper claude qual é a previsão do tempo
+09:41:58  →      opened claude — listening for dictation
+09:42:06  heard  [pt] pra São Paulo amanhã over
+09:42:06  →      sent: qual é a previsão do tempo pra São Paulo amanhã
+```
+
+Como ler quando algo não funcionou:
+
+| O que você vê | O que está acontecendo |
+|---|---|
+| Nenhuma linha | O áudio não está chegando — microfone errado ou permissão |
+| `heard` certo, nenhum `→` | Ele ouviu, mas não reconheceu o comando |
+| `heard` já torto | Transcrição — veja "Se ele não te reconhece" |
+| `heard` com `[en]` falando português | Idioma — veja "Só funciona em inglês" |
+
+Fica só na memória do app, nunca em arquivo: ele escuta o tempo todo,
+e gravar tudo o que você fala em disco não seria uma troca justa por
+um diagnóstico. Fechou o app, acabou.
+
 ### O jeito de desenvolvedor — rodar do código
 
 Precisa de **Python 3.10, 3.11 ou 3.12** (o 3.13 ainda não tem as
@@ -214,7 +240,8 @@ abrir uma aba à toa. Ajuste fino em `FUZZY_MATCH_THRESHOLD`
 
 Se mesmo assim parecer surdo: abra o menu e veja o **Heard:**, que
 mostra o que ele realmente entendeu — é a diferença entre "não me
-ouviu" e "ouviu mas escreveu diferente". Trocar a palavra de ativação
+ouviu" e "ouviu mas escreveu diferente". Se já passou tempo demais e o
+**Heard:** virou outra coisa, **Recent activity…** guarda o histórico. Trocar a palavra de ativação
 por uma REAL ("Vésper", "Íris") ajuda mais ainda:
 
 ```bash
@@ -297,6 +324,7 @@ instalou pelo `.dmg` e não tem o repositório na máquina:
 | **Spoken languages…** | Os idiomas que você fala — **vale na hora**, sem reabrir |
 | **iPhone connection…** | O tópico do ntfy que liga o iPhone a este Mac |
 | **Microphone ▸** | Qual microfone usar (ou detectar sozinho) |
+| **Recent activity…** | Não muda nada — mostra o que ele ouviu e decidiu |
 
 Os padrões, e as opções mais raras que só se ajustam por arquivo,
 estão no `config.py`:

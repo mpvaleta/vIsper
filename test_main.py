@@ -1025,5 +1025,83 @@ class SairTest(unittest.TestCase):
         fake_quit.assert_called_once()
 
 
+class HistoricoDeAtividadeTest(unittest.TestCase):
+    """
+    "Recent activity…" existe pro teste de verdade no Mac: quando um
+    comando não funciona, a pergunta é sempre "o que ele entendeu?" —
+    e o "Heard:" do menu só guarda o ÚLTIMO trecho, cortado em 45
+    caracteres, sobrescrito pelo próximo em ~4 segundos. Quando ela
+    abre o menu pra olhar, a prova já foi embora.
+    """
+
+    def test_o_que_foi_ouvido_entra_no_historico(self):
+        app = _build_app(load_model=True)
+        app._set_heard("[pt] vIsper claude qual é a previsão")
+        self.assertTrue(
+            any("vIsper claude qual é a previsão" in l for l in app._history)
+        )
+
+    def test_o_historico_guarda_inteiro_o_que_o_menu_corta(self):
+        # O "Heard:" corta em 45 caracteres porque item de menu
+        # comprido fica horrível — mas é justamente o fim da frase que
+        # costuma trazer o gatilho de fechamento. Cortar ali no
+        # histórico repetiria a limitação que ele existe pra resolver.
+        longa = "vIsper claude " + ("palavra " * 20) + "over"
+        app = _build_app(load_model=True)
+        app._set_heard(longa)
+        self.assertTrue(any(longa in l for l in app._history))
+        self.assertIn("…", app.heard_item.title)
+
+    def test_a_decisao_entra_junto_com_o_que_foi_ouvido(self):
+        # As duas metades importam separadas: a falha mais comum é elas
+        # não combinarem (ouviu certo, decidiu errado — ou nem ouviu).
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._set_heard("[pt] vIsper claude")
+        app._on_result("opened claude — listening for dictation")
+        texto = "\n".join(app._history)
+        self.assertIn("heard", texto)
+        self.assertIn("→", texto)
+        self.assertIn("opened claude", texto)
+
+    def test_silencio_nao_polui_o_historico(self):
+        # Trecho sem fala transcreve vazio o tempo todo. Se cada um
+        # virasse linha, as 40 linhas seriam consumidas por silêncio e
+        # o comando que falhou já teria saído da janela.
+        app = _build_app(load_model=True)
+        app._set_heard("")
+        app._on_result(None)
+        self.assertEqual(list(app._history), [])
+
+    def test_o_historico_nao_cresce_pra_sempre(self):
+        # O app escuta o tempo todo: sem teto, uma sessão longa vira
+        # vazamento de memória — e o alerta ficaria alto demais pra ler.
+        app = _build_app(load_model=True)
+        for i in range(main.HISTORY_MAX + 25):
+            app._set_heard(f"trecho {i}")
+        self.assertEqual(len(app._history), main.HISTORY_MAX)
+        # O que sobra é o RECENTE, não o começo: a pergunta é sempre
+        # sobre o que acabou de acontecer.
+        self.assertTrue(any("trecho 64" in l for l in app._history))
+        self.assertFalse(any("trecho 0 " in l or l.endswith("trecho 0") for l in app._history))
+
+    def test_o_menu_mostra_as_linhas_guardadas(self):
+        app = _build_app(load_model=True)
+        app._set_heard("[pt] vIsper claude")
+        main.rumps.alert.reset_mock()
+        app.open_activity(None)
+        main.rumps.alert.assert_called_once()
+        # O texto transcrito vai como `message` (2º argumento), não
+        # como `title`: é `message` que o rumps escapa contra "%".
+        self.assertIn("vIsper claude", main.rumps.alert.call_args[0][1])
+
+    def test_historico_vazio_explica_em_vez_de_abrir_janela_em_branco(self):
+        app = _build_app(load_model=True)
+        main.rumps.alert.reset_mock()
+        app.open_activity(None)
+        main.rumps.alert.assert_called_once()
+        self.assertIn("Nothing yet", main.rumps.alert.call_args[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()

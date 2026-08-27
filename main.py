@@ -33,6 +33,8 @@ CLAUDE.md); comentários e documentação continuam em português.
 import os
 import re
 import threading
+import time
+from collections import deque
 import rumps
 from faster_whisper import WhisperModel
 from PyObjCTools import AppHelper
@@ -59,6 +61,15 @@ import config
 
 
 MODEL_SIZE = "base"  # tiny/base/small — maior = mais preciso, mais lento
+
+# Quantas linhas de "o que ouvi / o que decidi" ficam guardadas pra
+# "Recent activity…". Só na MEMÓRIA, nunca em disco: o app escuta o
+# tempo todo, então gravar transcrição em arquivo seria uma mudança de
+# privacidade que ninguém pediu — e pra diagnosticar não é preciso,
+# porque a dúvida ("por que não funcionou agora?") é sempre sobre o
+# passado recente. 40 linhas cobrem bem mais que 40 trechos de tempo:
+# trecho silencioso não transcreve nada e não entra aqui.
+HISTORY_MAX = 40
 
 # ---------------------------------------------------------------------
 # ESTADOS — o que aparece na barra de menu.
@@ -215,6 +226,20 @@ class VisperApp(rumps.App):
         # a segunda é a mais provável (a wake word padrão é uma palavra
         # inventada — ver "Limite atual do reconhecimento" no README).
         self._last_heard = ""
+        # O "Heard:" acima mostra só o ÚLTIMO trecho, cortado em 45
+        # caracteres — some assim que chega o próximo. Isso basta pra
+        # "ele está me ouvindo?", mas não pra "falei o comando faz 30
+        # segundos e não aconteceu nada, o que ele entendeu?": quando
+        # ela abre o menu, a prova já foi sobrescrita. Este histórico é
+        # a resposta dessa segunda pergunta — ver HISTORY_MAX.
+        #
+        # deque(maxlen=...) é escrito pelas threads de escuta e lido
+        # pela thread principal (o @rumps.clicked). Não leva lock de
+        # propósito: append/list numa deque são atômicos no CPython, e
+        # o pior caso possível aqui seria uma linha entrar fora de
+        # ordem — irrelevante pra diagnóstico, e bem melhor que segurar
+        # um lock dentro do laço de transcrição.
+        self._history = deque(maxlen=HISTORY_MAX)
         # Timer que desfaz um estado momentâneo (hoje só o "mandou") —
         # ver _flash_state(). Um por vez; começar outro cancela o
         # anterior.
@@ -230,6 +255,7 @@ class VisperApp(rumps.App):
         self.heard_item = rumps.MenuItem("Heard: —", callback=None)
         self.menu = [
             self.heard_item,
+            "Recent activity…",
             None,
             "Start listening",
             "Stop listening",
@@ -343,12 +369,25 @@ class VisperApp(rumps.App):
         self._revert_timer.daemon = True
         self._revert_timer.start()
 
+    def _log_activity(self, marker, texto):
+        """Guarda uma linha no histórico de "Recent activity…".
+
+        Só memória, nunca disco — ver HISTORY_MAX. Chamado das threads
+        de escuta, mas NÃO precisa de AppHelper.callAfter: não toca em
+        nada do AppKit, só numa deque de Python. A regra da thread
+        principal vale pra MUTAÇÃO DE UI, e aqui não há nenhuma.
+        """
+        if not texto:
+            return
+        self._history.append(f"{time.strftime('%H:%M:%S')}  {marker}  {texto}")
+
     def _set_heard(self, texto):
         """Mostra no menu o que o Whisper entendeu por último. Mesmo
         motivo de _set_state() pra despachar via callAfter — chamado
         de _listen_loop_whisper() e _load_model(), as duas threads de
         fundo."""
         self._last_heard = texto or ""
+        self._log_activity("heard", self._last_heard)
         curto = self._last_heard[:45] + ("…" if len(self._last_heard) > 45 else "")
         label = f"Heard: {curto}" if curto else "Heard: —"
         AppHelper.callAfter(setattr, self.heard_item, "title", label)
@@ -674,6 +713,33 @@ class VisperApp(rumps.App):
             return None
         return resposta.text.strip()
 
+    @rumps.clicked("Recent activity…")
+    def open_activity(self, _):
+        """As últimas linhas de "ouvi X / decidi Y", numa janela só.
+
+        Existe pro teste de verdade no Mac: quando um comando não
+        funciona, a pergunta é sempre "o que ele entendeu?" — e até
+        agora a resposta já tinha sido sobrescrita pelo trecho
+        seguinte, ou era uma notificação que sumiu em segundos.
+
+        Roda a partir de um @rumps.clicked, ou seja, já na thread
+        principal — que é o que rumps.alert() (NSAlert + runModal())
+        exige. O texto transcrito vai como `message`, não como
+        `title`: `message` é o argumento de informativeTextWithFormat:
+        e o rumps dobra o "%" dele antes de passar adiante (conferido
+        no source do rumps 0.4.0), então uma fala com "%" — "cinquenta
+        por cento" vira "50%" com frequência — não vira código de
+        formatação.
+        """
+        linhas = list(self._history)
+        if not linhas:
+            rumps.alert(
+                "Recent activity",
+                "Nothing yet. Start listening and say something.",
+            )
+            return
+        rumps.alert("Recent activity", "\n".join(linhas))
+
     @rumps.clicked("Wake word…")
     def open_wake_word(self, _):
         nova = self._ask(
@@ -798,6 +864,11 @@ class VisperApp(rumps.App):
         """Retorno único pros dois caminhos de entrada (mic e iPhone)."""
         if not resultado:
             return
+        # As duas metades da história ficam no histórico: o que ele
+        # OUVIU (via _set_heard) e o que ele DECIDIU fazer com isso.
+        # Separadas, porque a falha mais comum é justamente as duas não
+        # combinarem — ouviu certo e decidiu errado, ou nem ouviu.
+        self._log_activity("→", resultado)
         notify("vIsper", "Status", resultado)
         # A máquina de estados é a fonte da verdade: depois de mandar,
         # a sessão volta pra ociosa, e o ícone tem que acompanhar. O
