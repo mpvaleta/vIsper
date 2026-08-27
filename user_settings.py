@@ -79,6 +79,15 @@ def _is_positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _is_lang_code_or_none(value):
+    """TRANSCRIPTION_LANGUAGE: None (detectar sozinho) ou um código
+    curto tipo "pt"/"en" — não valida contra a lista completa de
+    códigos do Whisper (mudaria a cada versão do modelo), só a FORMA."""
+    if value is None:
+        return True
+    return isinstance(value, str) and 2 <= len(value) <= 8
+
+
 def _is_match_ratio(value):
     """FUZZY_MATCH_THRESHOLD: fração entre 0.5 e 1.0 (1.0 = só exato).
     Abaixo de 0.5 qualquer palavra casa com qualquer outra — isso não é
@@ -128,6 +137,7 @@ VALIDATORS = {
     "PORCUPINE_ACCESS_KEY": _is_str,
     "PORCUPINE_KEYWORD_PATH": _is_str,
     "CLOSE_TRIGGERS": _is_str_list,
+    "TRANSCRIPTION_LANGUAGE": _is_lang_code_or_none,
     "FUZZY_MATCH_THRESHOLD": _is_match_ratio,
     "RELAY_BLOCKED_AIS": _is_str_list,
     "RELAY_MAX_MESSAGE_CHARS": _is_positive_int,

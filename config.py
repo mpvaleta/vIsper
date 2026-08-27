@@ -80,6 +80,20 @@ CLOSE_TRIGGERS = ["câmbio", "over"]
 # antigo deixa de valer.
 NTFY_TOPIC = ""
 
+# Idioma que o transcritor deve assumir. `None` = detectar sozinho a
+# cada trecho de ~4s (funciona, mas Whisper é conhecido por ser pouco
+# confiável detectando idioma em ÁUDIO CURTO — com poucos segundos de
+# fala, o modelo tende a "chutar" inglês com mais frequência do que
+# deveria, mesmo ouvindo outra língua com clareza; é limitação
+# documentada do próprio modelo, não bug daqui). Se você fala
+# predominantemente um idioma, force ele aqui — pula a detecção
+# incerta por completo, então funciona melhor E mais rápido:
+#   "pt" — português
+#   "en" — inglês
+# Lista completa de códigos: https://github.com/openai/whisper#available-models-and-languages
+# `python3 setup_visper.py` pergunta isso.
+TRANSCRIPTION_LANGUAGE = None
+
 # Tolerância a erro de transcrição na ABERTURA de comando (wake word e
 # nome da IA). O Whisper erra a grafia de palavra inventada com
 # frequência — "vIsper" vira "whisper"/"vesper", "claude" falado em

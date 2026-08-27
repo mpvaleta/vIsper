@@ -122,9 +122,25 @@ def main():
     if default_ai != config.DEFAULT_AI:
         novos["DEFAULT_AI"] = default_ai
 
+    # -- idioma da transcrição ------------------------------------------
+    print("─" * 62)
+    print("3) Que idioma você fala mais enquanto dita?")
+    print("   'auto' (padrão) detecta sozinho a cada trecho — funciona, mas")
+    print("   o Whisper é pouco confiável adivinhando idioma em trechos")
+    print("   CURTOS de fala: é comum ele 'chutar' inglês mesmo ouvindo")
+    print("   outra língua com clareza. Forçar aqui pula essa adivinhação")
+    print("   incerta — fica mais rápido E mais certo.")
+    idioma_atual = config.TRANSCRIPTION_LANGUAGE or "auto"
+    resposta_idioma = ask(
+        "   Digite 'pt', 'en', ou 'auto':", idioma_atual
+    ).strip().lower()
+    novo_idioma = None if resposta_idioma in ("", "auto", "none") else resposta_idioma
+    if novo_idioma != config.TRANSCRIPTION_LANGUAGE:
+        novos["TRANSCRIPTION_LANGUAGE"] = novo_idioma
+
     # -- ntfy ---------------------------------------------------------
     print("─" * 62)
-    print("3) Usar o iPhone pra disparar comando no Mac de qualquer lugar?")
+    print("4) Usar o iPhone pra disparar comando no Mac de qualquer lugar?")
     print("   (é o que faz funcionar longe de casa, tipo no treino)")
     print()
 
@@ -142,7 +158,7 @@ def main():
 
     # -- Porcupine (opcional) -----------------------------------------
     print("─" * 62)
-    print("4) Wake word acústica (Porcupine)? — opcional, pule se não sabe")
+    print("5) Wake word acústica (Porcupine)? — opcional, pule se não sabe")
     print("   Reconhece o SOM da palavra em vez da transcrição. Precisa de")
     print("   conta grátis em console.picovoice.ai. Sem isso o vIsper usa")
     print("   o modo Whisper contínuo, que já funciona.")

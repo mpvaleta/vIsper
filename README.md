@@ -15,9 +15,9 @@ usar:
 
 1. **Mac:** baixe o DMG (aba Actions → última execução ✅ → Artifacts),
    arraste pra Applications, **botão direito → Abrir** na primeira vez.
-2. Espere o ⏳ da barra de menu virar 🎙 (primeira vez baixa o modelo,
-   ~150 MB), clique → **Start listening**, e autorize Microfone e
-   Acessibilidade quando o macOS pedir.
+2. Espere o círculo **âmbar** da barra de menu virar **cinza** (primeira
+   vez baixa o modelo, ~150 MB), clique → **Start listening**, e
+   autorize Microfone e Acessibilidade quando o macOS pedir.
 3. Fale: **"vIsper claude oi over"**. Pronto — o resto deste README é
    detalhe.
 
@@ -65,9 +65,10 @@ código. Pra baixar:
    Apple (US$ 99/ano, contra o custo zero deste projeto). Só na
    primeira vez; depois o duplo clique funciona.
 
-4. Aparece um **⏳** na barra de menu. Na primeiríssima execução ele
-   baixa o modelo de transcrição (~150 MB), então precisa de internet e
-   pode demorar alguns minutos. Quando virar **🎙**, está pronto.
+4. Aparece um círculo **âmbar** na barra de menu. Na primeiríssima
+   execução ele baixa o modelo de transcrição (~150 MB), então precisa
+   de internet e pode demorar alguns minutos. Quando virar **cinza**,
+   está pronto.
 
 5. Clique no ícone → **Start listening**. O macOS vai pedir permissão
    de **Microfone**; autorize.
@@ -82,22 +83,24 @@ Pronto.
 
 ### O que o ícone está te dizendo
 
-O ícone da barra de menu é o estado do app, e usa as mesmas cores do
-resto do design:
+O ícone da barra de menu é um círculo colorido — a cor É o estado, nas
+mesmas cores do resto do design:
 
-| Ícone | Quer dizer |
+| Cor | Quer dizer |
 |---|---|
-| ⏳ | Carregando o modelo de transcrição (só na primeira vez demora) |
-| 🎙 | Pronto, mas **não** está escutando — clique em Start listening |
-| 🟢 | Escutando, esperando a palavra de ativação |
-| 🔴 | Te ouviu, está acumulando o ditado |
-| 🔵 | Acabou de colar e mandar |
-| 🟠 | Algo falhou — abra o menu, a explicação está lá |
+| Âmbar | Carregando o modelo de transcrição (só na primeira vez demora) |
+| Cinza | Pronto, mas **não** está escutando — clique em Start listening |
+| Verde | Escutando, esperando a palavra de ativação |
+| Coral | Te ouviu, está acumulando o ditado |
+| Azul | Acabou de colar e mandar |
+| Terracota | Algo falhou — abra o menu, a explicação está lá |
 
-Dentro do menu tem também **Heard:** — a última coisa que ele entendeu.
+Dentro do menu tem também **Heard:** — a última coisa que ele entendeu,
+com o **idioma que ele detectou** na frente (ex.: `[pt] oi tudo bem`).
 Esse é o primeiro lugar pra olhar quando parecer que ele te ignorou:
-quase sempre ele ouviu, mas transcreveu a palavra de ativação de outro
-jeito (ver "Se ele não te reconhece", abaixo).
+quase sempre ele ouviu, só que transcreveu a palavra de ativação de
+outro jeito, ou detectou o idioma errado (ver "Se ele não te
+reconhece", abaixo).
 
 ### O jeito de desenvolvedor — rodar do código
 
@@ -209,6 +212,24 @@ python3 setup_visper.py    # ele pergunta a palavra de ativação
 A solução definitiva continua sendo o Porcupine (mais abaixo), que
 reconhece o SOM da palavra em vez de tentar escrever ela.
 
+### "Só funciona em inglês" (ou só em português)
+
+Sintoma comum: você fala português e o **Heard:** mostra `[en]` na
+frente — o Whisper detectou o idioma ERRADO, não é que ele não
+entenda português. Detecção automática de idioma é pouco confiável em
+trechos CURTOS de fala (limitação conhecida do modelo, não bug daqui)
+— e o vIsper escuta em blocos de ~4 segundos.
+
+Corrige forçando o idioma:
+
+```bash
+python3 setup_visper.py    # pergunta "que idioma você fala mais"
+```
+
+Digite `pt` ou `en`. Se você alterna entre os dois na mesma conversa,
+deixe em `auto` (o padrão) — forçar um só melhora a confiabilidade
+justamente por abrir mão dessa flexibilidade.
+
 ---
 
 ## Microfone
@@ -261,6 +282,9 @@ estão no `config.py`:
   sozinhos, em ordem de prioridade
 - `FUZZY_MATCH_THRESHOLD` — quão tolerante a abertura é com erro de
   transcrição (0.72 padrão, medido; 1.0 = só casamento exato)
+- `TRANSCRIPTION_LANGUAGE` — força o idioma da transcrição (`"pt"`,
+  `"en"`...) em vez de detectar sozinho a cada trecho. Padrão `None`
+  (auto). Ver "Só funciona em inglês", acima.
 - `RELAY_BLOCKED_AIS` — o que o iPhone não pode abrir (ver Segurança)
 - `DICTATION_OPEN_SOUND` / `DICTATION_SEND_SOUND` — o som curto de
   abrir/mandar. Usa sons que já vêm no macOS (Pop, Glass, Tink, Ping…).
@@ -275,10 +299,10 @@ pelo `setup_visper.py`, que guarda tudo fora do repositório.
 
 | Você fala | O que acontece |
 |---|---|
-| "vIsper, abre o ChatGPT" | Abre o ChatGPT, entra em modo ditado (🔴) |
+| "vIsper, abre o ChatGPT" | Abre o ChatGPT, entra em modo ditado (ícone vira coral) |
 | "preciso de um resumo do relatório de vendas" | Vira parte da sua mensagem |
 | "do segundo trimestre, por favor" | Continua acumulando |
-| "câmbio" | Cola tudo no chat e aperta Enter (🔵) |
+| "câmbio" | Cola tudo no chat e aperta Enter (ícone vira azul) |
 
 Dois avisos que importam:
 

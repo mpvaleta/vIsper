@@ -12,10 +12,13 @@ lógica por causa dele. Os dublês abaixo imitam só o pedacinho da API
 que main.py usa de verdade.
 
 O que isso NÃO cobre, e continua só validável num Mac de verdade: o
-menu renderizar mesmo, o AppKit aceitar título mutável, o emoji do
-estado ficar legível na barra, e o áudio.
+menu renderizar mesmo, o AppKit aceitar ícone/título mutável de
+verdade, e o áudio. O despacho REAL pra thread principal (AppHelper.
+callAfter, ver main._set_state()) também só é validável lá — aqui o
+dublê de AppHelper executa na hora, sem run loop nenhum por trás.
 """
 
+import os
 import sys
 import types
 import unittest
@@ -64,12 +67,14 @@ class FakeMenuItem:
 
 
 class FakeApp:
-    def __init__(self, name, icon=None, quit_button=None):
-        # rumps.App guarda o nome como título da barra de menu, e
-        # main._set_state() troca esse título pra comunicar estado —
-        # então o dublê precisa ter o atributo desde o começo.
-        self.title = name
+    def __init__(self, name, title=None, icon=None, quit_button=None):
+        # main.VisperApp agora comunica estado pelo ÍCONE (círculo
+        # colorido, ver main.STATUS_ICONS), não mais pelo título em
+        # emoji — mas o dublê guarda os dois, já que rumps.App aceita
+        # os dois parâmetros de verdade.
         self.name = name
+        self.title = title
+        self.icon = icon
         self.menu = []
 
 
@@ -102,6 +107,22 @@ def _install_fakes():
         fake_fw = types.ModuleType("faster_whisper")
         fake_fw.WhisperModel = MagicMock()
         sys.modules["faster_whisper"] = fake_fw
+
+    if "PyObjCTools" not in sys.modules:
+        # AppHelper.callAfter é COMO main.py despacha qualquer coisa
+        # que toque AppKit (ícone, título de menu, rumps.alert) pra
+        # thread principal — ver main._set_state()/_set_heard() e o
+        # comentário no handler de AutomationDenied. Sem runloop de
+        # verdade num sandbox Linux, "despachar" aqui só quer dizer
+        # "chamar na hora": suficiente pra testar O QUE seria chamado
+        # e COM QUE argumento, que é o que os testes verificam — a
+        # entrega assíncrona de verdade só é testável num Mac.
+        fake_pyobjctools = types.ModuleType("PyObjCTools")
+        fake_apphelper = types.ModuleType("PyObjCTools.AppHelper")
+        fake_apphelper.callAfter = lambda func, *args, **kwargs: func(*args, **kwargs)
+        fake_pyobjctools.AppHelper = fake_apphelper
+        sys.modules["PyObjCTools"] = fake_pyobjctools
+        sys.modules["PyObjCTools.AppHelper"] = fake_apphelper
 
 
 _install_fakes()
@@ -226,13 +247,14 @@ class CarregarModeloTest(unittest.TestCase):
     def test_o_icone_existe_antes_do_modelo_carregar(self):
         app = _build_app()
         self.assertIsNone(app.model)
-        self.assertEqual(app.title, main.STATE_GLYPHS["loading"])
+        self.assertEqual(app._current_state, "loading")
+        self.assertEqual(app.icon, main.STATUS_ICONS["loading"])
 
     def test_modelo_carregado_deixa_o_app_pronto(self):
         app = _build_app(load_model=True)
         self.assertIsNotNone(app.model)
         self.assertIsNone(app.model_error)
-        self.assertEqual(app.title, main.STATE_GLYPHS["stopped"])
+        self.assertEqual(app._current_state, "stopped")
 
     def test_falha_ao_carregar_guarda_o_motivo_e_nao_levanta(self):
         app = _build_app()
@@ -240,7 +262,7 @@ class CarregarModeloTest(unittest.TestCase):
             app._load_model()  # não pode propagar: mataria a thread calada
         self.assertIsNone(app.model)
         self.assertIn("sem internet", app.model_error)
-        self.assertEqual(app.title, main.STATE_GLYPHS["error"])
+        self.assertEqual(app._current_state, "error")
 
     def test_iniciar_antes_do_modelo_explica_em_vez_de_falhar(self):
         app = _build_app()
@@ -304,13 +326,13 @@ class EstadoNaBarraTest(unittest.TestCase):
         app = _build_app(load_model=True)
         with patch.object(main.actions, "play_sound"):
             app._on_dictation_open()
-        self.assertEqual(app.title, main.STATE_GLYPHS["dictating"])
+        self.assertEqual(app._current_state, "dictating")
 
     def test_mandar_pinta_de_enviado(self):
         app = _build_app(load_model=True)
         with patch.object(main.actions, "play_sound"):
             app._on_dictation_send()
-        self.assertEqual(app.title, main.STATE_GLYPHS["sent"])
+        self.assertEqual(app._current_state, "sent")
 
     def test_parar_escuta_volta_pro_parado(self):
         app = _build_app(load_model=True)
@@ -318,7 +340,7 @@ class EstadoNaBarraTest(unittest.TestCase):
         app._set_state("listening")
         app.stop_listening(None)
         self.assertFalse(app.listening)
-        self.assertEqual(app.title, main.STATE_GLYPHS["stopped"])
+        self.assertEqual(app._current_state, "stopped")
 
     def test_o_que_foi_ouvido_aparece_no_menu(self):
         # A falha mais confusa deste app é a wake word ser transcrita
@@ -337,6 +359,143 @@ class EstadoNaBarraTest(unittest.TestCase):
         app = _build_app(load_model=True)
         app._set_heard("")
         self.assertEqual(app.heard_item.title, "Heard: —")
+
+
+class IconesDeStatusTest(unittest.TestCase):
+    """
+    STATUS_ICONS são círculos coloridos de VERDADE (PNG), nas cores
+    exatas de design/layouts_mockup.html — não mais emoji, cujas cores
+    são as do fonte da Apple, não as documentadas. Ver
+    design/generate_status_icons.py.
+    """
+
+    def test_todo_estado_tem_icone_e_o_arquivo_existe(self):
+        # STATE_GLYPHS tinha 6 chaves fixas; STATUS_ICONS precisa
+        # continuar com as MESMAS 6, e cada uma apontando pra um PNG
+        # que existe de verdade — se o asset sumir do repo (ex.:
+        # alguém apaga status_icons/ sem querer), main.py abriria e
+        # morreria tentando carregar um ícone inexistente.
+        esperados = {"stopped", "loading", "listening", "dictating", "sent", "error"}
+        self.assertEqual(set(main.STATUS_ICONS), esperados)
+        for estado, caminho in main.STATUS_ICONS.items():
+            with self.subTest(estado=estado):
+                self.assertTrue(
+                    os.path.isfile(caminho), f"{caminho} não existe"
+                )
+                self.assertTrue(caminho.endswith(".png"))
+
+    def test_icone_inicial_e_o_de_carregando(self):
+        app = _build_app()
+        self.assertEqual(app.icon, main.STATUS_ICONS["loading"])
+
+    def test_construtor_usa_nome_fixo_nao_o_glifo_de_estado(self):
+        # Regressão de um detalhe sutil: rumps.App usa o parâmetro
+        # `name` (não `title`) pra nomear a pasta de Application
+        # Support dele (rumps.application_support). A versão em emoji
+        # passava o GLIFO DE ESTADO ali (ex.: "⏳") — inofensivo, mas
+        # sem sentido, e escondia esse acoplamento. Agora é "vIsper" de
+        # verdade.
+        app = _build_app()
+        self.assertEqual(app.name, "vIsper")
+
+
+class DespachoParaThreadPrincipalTest(unittest.TestCase):
+    """
+    _set_state()/_set_heard()/o rumps.alert() de permissão negada são
+    chamados de THREADS DE FUNDO (_load_model, _listen_loop_*,
+    _on_result vindo do relay) — mexer em AppKit (ícone, título de
+    menu, NSAlert) fora da main thread é a violação real que crashou
+    o app rodando de verdade: "Must only be used from the main
+    thread", bem no meio de _rebuild_mic_menu/popUpStatusBarMenu.
+
+    Estes testes checam que o CAMINHO passa por AppHelper.callAfter —
+    não só que o efeito final acontece (isso os testes de
+    EstadoNaBarraTest já cobrem, com o dublê de callAfter executando
+    na hora). Patcheia main.AppHelper.callAfter direto por um
+    MagicMock (em vez do dublê global que executa na hora) pra
+    inspecionar OS ARGUMENTOS da chamada.
+    """
+
+    def test_set_state_despacha_via_callafter(self):
+        app = _build_app()
+        with patch.object(main.AppHelper, "callAfter") as fake_call_after:
+            app._set_state("listening")
+        fake_call_after.assert_called_once_with(
+            setattr, app, "icon", main.STATUS_ICONS["listening"]
+        )
+        # O estado LÓGICO já reflete a troca na hora — só a mutação de
+        # AppKit em si que é assíncrona (ver o comentário na função).
+        self.assertEqual(app._current_state, "listening")
+
+    def test_set_heard_despacha_via_callafter(self):
+        app = _build_app()
+        with patch.object(main.AppHelper, "callAfter") as fake_call_after:
+            app._set_heard("oi tudo bem")
+        fake_call_after.assert_called_once_with(
+            setattr, app.heard_item, "title", "Heard: oi tudo bem"
+        )
+
+    def test_alerta_de_permissao_negada_despacha_via_callafter(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        with patch.object(
+            app,
+            "_listen_loop",
+            side_effect=main.actions.AutomationDenied("not allowed assistive access"),
+        ), patch.object(main.AppHelper, "callAfter") as fake_call_after:
+            app._listen_loop_safe()
+        # rumps.alert (não uma lambda/wrapper) precisa ser o primeiro
+        # argumento — é o que garante que o alerta realmente aparece,
+        # só que despachado, em vez de silenciosamente não chamado.
+        self.assertEqual(fake_call_after.call_args[0][0], main.rumps.alert)
+        mensagem = fake_call_after.call_args[0][1]
+        self.assertIn("Accessibility", mensagem)
+
+
+class IdiomaDeTranscricaoTest(unittest.TestCase):
+    """
+    main.LANGUAGE vem de config.TRANSCRIPTION_LANGUAGE (None = Whisper
+    detecta sozinho a cada trecho — pouco confiável em áudio CURTO, ver
+    comentário completo em config.py). O idioma REALMENTE detectado
+    entra no "Heard:" ("[pt] oi tudo bem") — é o que separa "o app não
+    suporta português" de "o Whisper ouviu certo mas cravou o idioma
+    errado", que é o diagnóstico certo pro caso real.
+    """
+
+    class _FakeSegment:
+        def __init__(self, text):
+            self.text = text
+
+    class _FakeInfo:
+        def __init__(self, language):
+            self.language = language
+
+    def _run_one_chunk(self, app, texto, idioma):
+        fake_stream = MagicMock()
+        fake_stream.chunks.return_value = iter([object()])  # um chunk só
+        app.model = MagicMock()
+        app.model.transcribe.return_value = (
+            [self._FakeSegment(texto)],
+            self._FakeInfo(idioma),
+        )
+        with patch.object(app.session, "handle", return_value=None):
+            app._listen_loop_whisper(fake_stream)
+        return app.model.transcribe
+
+    def test_idioma_detectado_aparece_no_heard(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        self._run_one_chunk(app, "oi tudo bem", "pt")
+        self.assertEqual(app._last_heard, "[pt] oi tudo bem")
+
+    def test_hotwords_e_idioma_configurado_vao_pro_transcribe(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        transcribe = self._run_one_chunk(app, "oi", "pt")
+        _args, kwargs = transcribe.call_args
+        self.assertEqual(kwargs["language"], main.LANGUAGE)
+        self.assertEqual(kwargs["hotwords"], app._hotwords)
+        self.assertTrue(kwargs["vad_filter"])
 
 
 class IniciarEscutaTest(unittest.TestCase):
@@ -403,7 +562,7 @@ class IniciarEscutaTest(unittest.TestCase):
 
         fake_thread.assert_called_once()
         self.assertTrue(app.listening)
-        self.assertEqual(app.title, main.STATE_GLYPHS["listening"])
+        self.assertEqual(app._current_state, "listening")
 
     def test_avisa_qualidade_bluetooth_ao_iniciar_com_fone(self):
         app = _build_app(
@@ -436,7 +595,7 @@ class ErroDePermissaoTest(unittest.TestCase):
         ):
             app._listen_loop_safe()
         self.assertFalse(app.listening)
-        self.assertEqual(app.title, main.STATE_GLYPHS["error"])
+        self.assertEqual(app._current_state, "error")
         mensagem = main.rumps.alert.call_args[0][0]
         self.assertIn("Accessibility", mensagem)
 
@@ -446,7 +605,7 @@ class ErroDePermissaoTest(unittest.TestCase):
         with patch.object(app, "_listen_loop", side_effect=OSError("device gone")):
             app._listen_loop_safe()
         self.assertFalse(app.listening)
-        self.assertEqual(app.title, main.STATE_GLYPHS["error"])
+        self.assertEqual(app._current_state, "error")
         main.rumps.alert.assert_not_called()
         self.assertIn("Audio error", main.rumps.notification.call_args[0][2])
 

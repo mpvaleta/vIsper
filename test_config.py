@@ -31,3 +31,8 @@ class TranscriptionHotwordsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TranscriptionLanguageTest(unittest.TestCase):
+    def test_padrao_e_none_detecta_sozinho(self):
+        self.assertIsNone(config.TRANSCRIPTION_LANGUAGE)

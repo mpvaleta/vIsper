@@ -90,6 +90,22 @@ não bug daqui).
   em vez de rapidfuzz de propósito: são ~10 palavras curtas por chunk,
   performance é irrelevante, e uma dependência nativa nova arriscaria
   o build do .app que acabou de ficar verde.
+- **`TRANSCRIPTION_LANGUAGE` (padrão `None`, configurável por
+  `setup_visper.py`) força o idioma da transcrição em vez de deixar o
+  Whisper detectar sozinho.** Motivo, achado testando de verdade: com
+  `language=None`, os chunks de 4s (`AudioStream.chunks()`) às vezes
+  são CURTOS DEMAIS pra detecção de idioma do Whisper ser confiável —
+  é limitação documentada do próprio modelo (viés conhecido pra
+  inglês em áudio curto/ambíguo), não bug daqui. A Valeta relatou "só
+  funciona em inglês" falando português; forçar `"pt"` pula essa
+  adivinhação incerta por completo. Fica configurável (não hardcoded
+  pra `"pt"`) porque forçar um idioma único tem um custo real: quem
+  alterna PT/EN na mesma sessão perde a flexibilidade do auto-detect
+  — a escolha certa depende de como CADA pessoa fala, não é universal.
+  Pra diagnosticar sem precisar adivinhar: o idioma DETECTADO
+  (`info.language`, devolvido pelo próprio `transcribe()`) agora
+  aparece no "Heard:" (`"[pt] oi tudo bem"`) — separa "o Whisper não
+  ouviu" de "ouviu certo mas cravou o idioma errado".
 - **iPhone precisa ser um app separado que aciona o Mac, não que
   repete a automação sozinho** — iOS não deixa um app simular teclado
   dentro de outro app (sandbox). Não existe "AppleScript do iOS".
@@ -182,15 +198,61 @@ não bug daqui).
   `config.py`. Efeito colateral que resolve o pedido de distribuir pra
   outras pessoas: cada uma tem a sua config, e `git pull` nunca
   conflita com ela.
-- **O ícone da barra de menu É o estado** (`main.STATE_GLYPHS`:
-  ⏳ carregando, 🎙 parado, 🟢 escutando, 🔴 ditando, 🔵 mandou,
-  🟠 erro). Antes o título era fixo e o único retorno era notificação,
-  que some sozinha em segundos — não dava pra responder a pergunta mais
-  básica ("ele está me ouvindo agora?") sem falar uma frase de teste e
-  torcer. As cores são as MESMAS da paleta semântica do
-  `design/layouts_mockup.html`. Bolinha colorida em vez de imagem
-  template porque lê bem no tamanho da barra, funciona igual em modo
-  claro/escuro, e não vira mais um arquivo pro py2app empacotar.
+- **O ícone da barra de menu É o estado** (`main.STATUS_ICONS`:
+  carregando/parado/escutando/ditando/mandou/erro). Antes o título era
+  fixo e o único retorno era notificação, que some sozinha em segundos
+  — não dava pra responder a pergunta mais básica ("ele está me
+  ouvindo agora?") sem falar uma frase de teste e torcer.
+  **Já passou por DUAS versões**, e a primeira ensinou uma lição que
+  vale registrar: começou como EMOJI (⏳🎙🟢🔴🔵🟠) como texto do
+  título — funcionava, mas a Valeta testou de verdade e apontou que
+  "as cores que você falou não estão funcionando": emoji usa as cores
+  do FONTE da Apple, não as da paleta semântica documentada (🟠 não é
+  terracota; 🎙 não tem cor de estado nenhuma). Agora são PNGs de
+  círculo sólido de verdade (`status_icons/*.png`, gerados por
+  `design/generate_status_icons.py` com zlib+struct puro — sem Pillow,
+  sem dependência nova só pra 6 imagens pequenas), nas MESMAS cores
+  hex de `design/layouts_mockup.html` — `test_status_icons.py` fecha o
+  círculo comparando o PIXEL de verdade do PNG contra o hex do
+  mockup, não só a intenção. **Sem `template=True`** (rumps.App.icon,
+  parâmetro `template`) de propósito: template forçaria monocromático
+  conforme claro/escuro, apagando a cor de novo pelo mesmo motivo do
+  emoji, só que por outro caminho — conferido no source do rumps
+  0.4.0 (`_nsimage_from_file`, `image.setTemplate_`), não de memória.
+  `setup.py` leva `status_icons/` pro bundle via `DATA_FILES`
+  explícito — carregado por CAMINHO de arquivo (`rumps.App.icon`
+  exige path, não aceita bytes/NSImage direto), então py2app não
+  rastreia essa dependência sozinho só seguindo imports.
+- **Toda mutação de AppKit vinda de thread de FUNDO passa por
+  `AppHelper.callAfter`** (`PyObjCTools.AppHelper`, já vem com
+  `pyobjc-framework-Cocoa` — dependência do próprio rumps, nada novo
+  pra instalar). **Crash real, achado testando de verdade** (não
+  suposição): `EXC_BREAKPOINT`/`SIGTRAP`, "Must only be used from the
+  main thread", bem no meio de `popUpStatusBarMenu` — a Valeta tinha o
+  menu ABERTO no exato momento em que uma thread de fundo
+  (`_load_model`, `_listen_loop_*`, ou `_on_result` vindo do relay do
+  iPhone) tentava trocar o ícone ou o texto do "Heard:". AppKit não é
+  thread-safe pra mutação de UI — regra do próprio Apple, não bug do
+  rumps nem do PyObjC. Sistemática: qualquer `self.icon = ...`,
+  `self.<MenuItem>.title = ...`, ou `rumps.alert()` (cria `NSAlert` e
+  chama `runModal()` — MESMA exigência de main thread, achado
+  revendo TODOS os call sites depois do crash, não só o que apareceu
+  no relatório) chamado de fora de um `@rumps.clicked` (que já roda na
+  main thread) PRECISA passar por `AppHelper.callAfter`.
+  `rumps.notification()` é a ÚNICA exceção conferida — usa
+  `NSUserNotificationCenter`, que a Apple documenta como thread-safe
+  pra postar (`notify()` continua chamado direto de qualquer thread).
+  Rastreamos o estado LÓGICO num atributo Python simples
+  (`self._current_state`, atualizado SINCRONAMENTE) em vez de reler
+  `self.icon`/`self.title` depois de mudar: a mutação real do AppKit
+  via `callAfter` é ASSÍNCRONA (só acontece no próximo ciclo do
+  runloop principal), então reler a propriedade logo em seguida podia
+  pegar o valor ANTIGO — foi exatamente esse padrão que
+  `_on_result()` usava antes (`self.title != STATE_GLYPHS["sent"]`) e
+  precisou ser trocado. Dublê de teste (`test_main.py`,
+  `PyObjCTools.AppHelper` fake) executa o callback NA HORA — suficiente
+  pra testar o QUE seria chamado e COM QUE argumento, mas a entrega
+  assíncrona de verdade continua só validável num Mac.
 - **O modelo do Whisper carrega em THREAD, nunca no `__init__`.**
   São ~150 MB baixados na primeira execução: no `__init__` o app ficava
   minutos sem ícone nenhum, e qualquer falha matava o processo ANTES do
@@ -500,7 +562,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 244 testes no total. Rodar com:
+- `test_*.py` — 263 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -682,6 +744,15 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
   comportamento COM microfone e COM permissões concedidas.
 - **O app de iPhone funciona num navegador real** (25 testes,
   `test_pwa.js`, no CI a cada push).
+- **`python3 main.py` roda de verdade num Mac** — a Valeta testou.
+  Ícone aparece, escuta liga, permissões de Microfone/Acessibilidade
+  funcionam, o modelo baixa e carrega. Achou (e já está corrigido) o
+  crash real de thread documentado em "Decisões de arquitetura"
+  (`AppHelper.callAfter`) e o bug do `mic_menu.clear()` (ver histórico
+  de commits) — os dois só apareceram rodando de verdade, nenhum dos
+  dois foi pego só lendo código. O que continua sem validação completa
+  de ponta a ponta: uma sessão inteira sem crash (abrir → ditar →
+  mandar, repetido), e o Porcupine com hardware real.
 
 ## Próximos passos, em ordem de prioridade
 

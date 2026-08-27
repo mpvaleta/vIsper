@@ -30,10 +30,12 @@ Texto de interface em INGLÊS de propósito (decisão registrada no
 CLAUDE.md); comentários e documentação continuam em português.
 """
 
+import os
 import re
 import threading
 import rumps
 from faster_whisper import WhisperModel
+from PyObjCTools import AppHelper
 
 from audio_input import (
     AudioStream,
@@ -57,9 +59,12 @@ import config
 
 
 MODEL_SIZE = "base"  # tiny/base/small — maior = mais preciso, mais lento
-# language=None deixa o Whisper detectar o idioma a cada trecho, pra
-# funcionar em português, inglês, ou qualquer outro que você fale.
-LANGUAGE = None
+# config.TRANSCRIPTION_LANGUAGE: None deixa o Whisper detectar o idioma
+# a cada trecho (funciona, mas é pouco confiável em áudio CURTO — ver
+# comentário completo em config.py); forçar "pt" ou "en" pula essa
+# detecção incerta. Lido uma vez aqui, igual a self._hotwords — muda
+# via `python3 setup_visper.py`, não precisa editar código.
+LANGUAGE = config.TRANSCRIPTION_LANGUAGE
 
 # ---------------------------------------------------------------------
 # ESTADOS — o que aparece na barra de menu.
@@ -69,20 +74,27 @@ LANGUAGE = None
 # básica de todas — "ele está me ouvindo agora?" — sem falar uma frase
 # de teste e torcer.
 #
-# As cores são as MESMAS da paleta semântica de design/layouts_mockup.html
-# (cinza=ocioso, verde=escutando, âmbar=ocupado, coral=ditando,
-# azul=mandou, terracota=erro). Círculo colorido em vez de imagem
-# template porque a bolinha lê bem no tamanho da barra de menu e
-# funciona igual em modo claro e escuro, sem precisar de dois assets
-# nem de arquivo externo que o py2app teria que empacotar.
+# CÍRCULO COLORIDO DE VERDADE, não emoji. A primeira versão usava
+# emoji (⏳🎙🟢🔴🔵🟠) como o TÍTULO da barra de menu — funcionava, mas
+# as cores eram as do FONTE DE EMOJI da Apple, não as da paleta
+# semântica documentada (design/layouts_mockup.html): 🟠 não é
+# terracota, 🎙 não tem cor de estado nenhuma. As cores abaixo são as
+# MESMAS (mesmo hex) do mockup — cinza=ocioso, âmbar=carregando,
+# verde=escutando, coral=ditando, azul=mandou, terracota=erro. Os
+# PNGs (status_icons/, gerados por design/generate_status_icons.py)
+# são círculos sólidos SEM modo template — se virassem template o
+# macOS forçaria monocromático (preto/branco conforme claro/escuro) e
+# a cor documentada sumiria de novo, o mesmo problema do emoji só que
+# por outro caminho.
 # ---------------------------------------------------------------------
-STATE_GLYPHS = {
-    "stopped": "🎙",    # parado — mas vivo, e claramente o vIsper
-    "loading": "⏳",     # carregando o modelo de transcrição
-    "listening": "🟢",  # escutando, esperando a wake word
-    "dictating": "🔴",  # ouviu a wake word, acumulando o ditado
-    "sent": "🔵",       # acabou de colar e mandar
-    "error": "🟠",      # algo falhou — o menu explica o quê
+_ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "status_icons")
+STATUS_ICONS = {
+    "stopped": os.path.join(_ICON_DIR, "stopped.png"),      # parado — mas vivo
+    "loading": os.path.join(_ICON_DIR, "loading.png"),      # carregando o modelo
+    "listening": os.path.join(_ICON_DIR, "listening.png"),  # esperando a wake word
+    "dictating": os.path.join(_ICON_DIR, "dictating.png"),  # acumulando o ditado
+    "sent": os.path.join(_ICON_DIR, "sent.png"),            # acabou de colar e mandar
+    "error": os.path.join(_ICON_DIR, "error.png"),          # o menu explica o quê
 }
 
 
@@ -110,7 +122,21 @@ def notify(titulo, subtitulo, mensagem):
 
 class VisperApp(rumps.App):
     def __init__(self):
-        super().__init__(STATE_GLYPHS["loading"], icon=None, quit_button=None)
+        # name="vIsper" (não mais o glifo de estado): rumps usa esse
+        # valor pra nomear a pasta de Application Support dele
+        # (rumps.application_support) — deixar um caractere de estado
+        # ali criaria (inofensivamente, mas sem sentido) uma pasta com
+        # nome de emoji. icon= já entra com o círculo de "carregando":
+        # sem isso o app ficava com o nome como texto até o primeiro
+        # _set_state(), um instante de UI errada.
+        super().__init__(
+            "vIsper", icon=STATUS_ICONS["loading"], title=None, quit_button=None
+        )
+        # Rastreado à parte de self.icon/self.title de propósito — ver
+        # _set_state(). A atualização REAL do AppKit é assíncrona
+        # (despachada pra thread principal); reler self.icon logo
+        # depois de chamar _set_state() pegaria o valor ANTIGO.
+        self._current_state = "loading"
         self.router = CommandRouter(actions.AI_ACTIONS)
         self.session = DictationSession(
             router=self.router,
@@ -236,14 +262,37 @@ class VisperApp(rumps.App):
     # ------------------------------------------------------------------
 
     def _set_state(self, state):
-        """Troca o glifo da barra de menu. Ver STATE_GLYPHS."""
-        self.title = STATE_GLYPHS.get(state, STATE_GLYPHS["stopped"])
+        """
+        Troca o ícone colorido da barra de menu. Ver STATUS_ICONS.
+
+        SEMPRE despachado pra thread principal via AppHelper.callAfter
+        — bug real, achado rodando de verdade: main.py chama isto de
+        THREADS DE FUNDO o tempo todo (_load_model, _listen_loop_*,
+        _on_result vindo do relay do iPhone), e mexer em NSStatusItem
+        fora da main thread é uma violação de verdade do AppKit
+        ("Must only be used from the main thread") — crashava na hora
+        que a pessoa tinha o menu ABERTO enquanto uma dessas threads
+        tentava atualizar o ícone por baixo. AppHelper.callAfter (do
+        PyObjCTools que já vem com pyobjc-framework-Cocoa, dependência
+        do próprio rumps — nada novo pra instalar) resolve isso do
+        jeito padrão: `performSelectorOnMainThread_withObject_
+        waitUntilDone_`, o mesmo mecanismo que qualquer app PyObjC
+        usa. Seguro chamar daqui até da própria main thread (só enfileira
+        pro próximo ciclo do runloop).
+        """
+        self._current_state = state
+        icon_path = STATUS_ICONS.get(state, STATUS_ICONS["stopped"])
+        AppHelper.callAfter(setattr, self, "icon", icon_path)
 
     def _set_heard(self, texto):
-        """Mostra no menu o que o Whisper entendeu por último."""
+        """Mostra no menu o que o Whisper entendeu por último. Mesmo
+        motivo de _set_state() pra despachar via callAfter — chamado
+        de _listen_loop_whisper() e _load_model(), as duas threads de
+        fundo."""
         self._last_heard = texto or ""
         curto = self._last_heard[:45] + ("…" if len(self._last_heard) > 45 else "")
-        self.heard_item.title = f"Heard: {curto}" if curto else "Heard: —"
+        label = f"Heard: {curto}" if curto else "Heard: —"
+        AppHelper.callAfter(setattr, self.heard_item, "title", label)
 
     def _on_dictation_open(self):
         self._set_state("dictating")
@@ -570,11 +619,14 @@ class VisperApp(rumps.App):
         notify("vIsper", "Status", resultado)
         # A máquina de estados é a fonte da verdade: depois de mandar,
         # a sessão volta pra ociosa, e o ícone tem que acompanhar. O
-        # 🔵 de "mandou" é posto por _on_dictation_send e fica até a
-        # próxima transição.
+        # estado "sent" (posto por _on_dictation_send) fica até a
+        # próxima transição — comparado via self._current_state, NÃO
+        # self.icon: a troca de ícone é assíncrona (ver _set_state()),
+        # então ler self.icon aqui logo em seguida podia pegar o valor
+        # ANTIGO e reabrir a corrida que esse guard existe pra evitar.
         if self.session.dictating:
             self._set_state("dictating")
-        elif self.listening and self.title != STATE_GLYPHS["sent"]:
+        elif self.listening and self._current_state != "sent":
             self._set_state("listening")
 
     def _listen_loop_safe(self):
@@ -599,12 +651,19 @@ class VisperApp(rumps.App):
             # único cuja correção é um caminho fixo de Ajustes.
             self.listening = False
             self._set_state("error")
-            rumps.alert(
+            # rumps.alert() cria um NSAlert e chama runModal() — outra
+            # chamada de AppKit que só pode acontecer na thread
+            # principal, e este except roda dentro da thread de escuta
+            # (_listen_loop_safe é o alvo de threading.Thread em
+            # start_listening()). Mesmo despacho de _set_state(); ver
+            # o comentário lá pro porquê.
+            AppHelper.callAfter(
+                rumps.alert,
                 "vIsper needs Accessibility permission to type into your AI "
                 "chat.\n\n"
                 "Open System Settings › Privacy & Security › Accessibility "
                 "and turn vIsper on, then start listening again.\n\n"
-                f"({exc})"
+                f"({exc})",
             )
         except Exception as exc:
             self.listening = False
@@ -621,7 +680,7 @@ class VisperApp(rumps.App):
         for chunk in stream.chunks():
             if not self.listening:
                 break
-            segments, _info = self.model.transcribe(
+            segments, info = self.model.transcribe(
                 chunk,
                 language=LANGUAGE,
                 # vad_filter descarta o que não for fala antes de
@@ -650,7 +709,13 @@ class VisperApp(rumps.App):
             # vêm com espaço embutido, " ".join() duplicava.
             text = re.sub(r"\s+", " ", "".join(seg.text for seg in segments)).strip()
             if text:
-                self._set_heard(text)
+                # O código do idioma DETECTADO (info.language) entra
+                # junto no "Heard:" — diagnóstico direto pra "ele não
+                # entende português": se aparecer "[en]" com você
+                # falando português, o problema é a detecção de
+                # idioma em áudio curto (ver config.TRANSCRIPTION_LANGUAGE),
+                # não o app "não suportar" o idioma.
+                self._set_heard(f"[{info.language}] {text}")
             self._on_result(self.session.handle(text))
 
     def _listen_loop_porcupine(self):

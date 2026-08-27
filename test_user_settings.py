@@ -240,3 +240,43 @@ class FuzzyThresholdTest(SettingsTestCase):
             with self.subTest(valor=ruim):
                 self.escrever({"FUZZY_MATCH_THRESHOLD": ruim})
                 self.assertEqual(user_settings.load_settings(), {})
+
+
+class TranscriptionLanguageTest(SettingsTestCase):
+    """
+    TRANSCRIPTION_LANGUAGE: None (detectar sozinho) ou um código curto
+    tipo "pt"/"en" — a resposta direta pra "só funciona em inglês", que
+    é o Whisper sendo pouco confiável detectando idioma em áudio CURTO
+    (ver comentário completo em config.py).
+    """
+
+    def test_aceita_codigo_de_idioma(self):
+        self.escrever({"TRANSCRIPTION_LANGUAGE": "pt"})
+        self.assertEqual(
+            user_settings.load_settings(), {"TRANSCRIPTION_LANGUAGE": "pt"}
+        )
+
+    def test_aceita_none_explicito(self):
+        self.escrever({"TRANSCRIPTION_LANGUAGE": None})
+        self.assertEqual(
+            user_settings.load_settings(), {"TRANSCRIPTION_LANGUAGE": None}
+        )
+
+    def test_rejeita_tipo_errado(self):
+        for ruim in [7, ["pt"], True]:
+            with self.subTest(valor=ruim):
+                self.escrever({"TRANSCRIPTION_LANGUAGE": ruim})
+                self.assertEqual(user_settings.load_settings(), {})
+
+    def test_config_le_o_idioma_sobreposto(self):
+        import importlib
+
+        self.escrever({"TRANSCRIPTION_LANGUAGE": "pt"})
+        import config
+
+        importlib.reload(config)
+        try:
+            self.assertEqual(config.TRANSCRIPTION_LANGUAGE, "pt")
+        finally:
+            os.environ.pop(user_settings.ENV_OVERRIDE, None)
+            importlib.reload(config)
