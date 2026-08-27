@@ -200,16 +200,13 @@ class VisperApp(rumps.App):
         # Idiomas que ela fala (ver config.TRANSCRIPTION_LANGUAGES).
         # Um só = força ele e pula a detecção. Vários = detecta mas
         # valida contra a lista. Nenhum = sem restrição.
-        self._allowed_languages = list(config.TRANSCRIPTION_LANGUAGES or [])
-        self._forced_language = (
-            self._allowed_languages[0] if len(self._allowed_languages) == 1 else None
-        )
         # Último idioma que passou na validação — vira o idioma de
         # reserva quando a detecção sai da lista ou vem insegura.
         # Melhor reserva do que o primeiro da lista: pessoa não troca
         # de idioma a cada 4 segundos, então "o que estava valendo
         # agora há pouco" acerta bem mais que um padrão fixo.
         self._last_good_language = None
+        self._apply_languages(config.TRANSCRIPTION_LANGUAGES)
 
         # Última coisa que o Whisper entendeu. Fica visível no menu
         # porque a falha mais confusa deste app é a wake word ser
@@ -238,7 +235,9 @@ class VisperApp(rumps.App):
             "Stop listening",
             None,
             self.mic_menu,
-            "Settings…",
+            "Wake word…",
+            "Spoken languages…",
+            "iPhone connection…",
             None,
             "Quit vIsper",
         ]
@@ -633,7 +632,119 @@ class VisperApp(rumps.App):
     # configurar o iPhone.
     # ------------------------------------------------------------------
 
-    @rumps.clicked("Settings…")
+    def _apply_languages(self, idiomas):
+        """Passa a valer a lista de idiomas — do __init__ ou do menu.
+
+        Num método só (em vez de repetido nos dois lugares) porque as
+        três coisas derivadas têm que mudar JUNTAS: com um idioma só,
+        `_forced_language` pula a detecção; com vários ela é validada
+        contra `_allowed_languages`; e o idioma de reserva guardado de
+        antes pode nem estar na lista nova, então é zerado.
+        """
+        self._allowed_languages = list(idiomas or [])
+        self._forced_language = (
+            self._allowed_languages[0] if len(self._allowed_languages) == 1 else None
+        )
+        self._last_good_language = None
+
+    def _ask(self, title, message, default_text=""):
+        """Uma caixa de texto do rumps, com o valor atual já dentro.
+
+        Existe porque configurar pelo menu NÃO pode depender de
+        Terminal: quem instalou pelo .dmg não tem o repositório nem o
+        setup_visper.py na máquina — mandar essa pessoa "editar o
+        config.py" é exatamente o atrito que o .dmg foi feito pra
+        tirar.
+
+        Devolve None se cancelou, ou o texto (já aparado) se
+        confirmou. Roda sempre a partir de um @rumps.clicked, ou seja,
+        já na thread principal — rumps.Window cria NSAlert e chama
+        runModal(), que exigem isso (mesma regra do rumps.alert(), ver
+        _set_state()).
+        """
+        resposta = rumps.Window(
+            title=title,
+            message=message,
+            default_text=default_text,
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(340, 24),
+        ).run()
+        if not resposta.clicked:
+            return None
+        return resposta.text.strip()
+
+    @rumps.clicked("Wake word…")
+    def open_wake_word(self, _):
+        nova = self._ask(
+            "vIsper wake word",
+            (
+                "The word that wakes vIsper up. Everything you say after it "
+                "is treated as a command.\n\n"
+                "Pick a REAL, distinctive word — vIsper recognises it from a "
+                "transcript, and made-up words get transcribed wrong. "
+                "'Vesper', 'Iris' and 'Whisper' land far more reliably than "
+                "an invented one.\n\n"
+                "Leave it unchanged and press Save to keep what you have."
+            ),
+            config.WAKE_WORD,
+        )
+        if not nova or nova == config.WAKE_WORD:
+            return
+        if not save_settings({"WAKE_WORD": nova}):
+            rumps.alert(f"Could not write the settings file:\n{settings_path()}")
+            return
+        rumps.alert(
+            f"Wake word saved as “{nova}”. Quit and reopen vIsper to start "
+            "using it — and update it on your iPhone too, or what it sends "
+            "will be ignored."
+        )
+
+    @rumps.clicked("Spoken languages…")
+    def open_languages(self, _):
+        atual = ", ".join(config.TRANSCRIPTION_LANGUAGES) or "auto"
+        resposta = self._ask(
+            "Languages you speak",
+            (
+                "Comma-separated language codes — vIsper will never "
+                "transcribe in anything outside this list.\n\n"
+                "This is what fixes “it only understands English”: guessing "
+                "the language from a few seconds of speech is unreliable, "
+                "and whatever it guesses is the language it writes in — so a "
+                "wrong guess becomes wrong TEXT.\n\n"
+                "pt        one language only: skips the guess entirely\n"
+                "pt, en    switches between them safely\n"
+                "auto      no restriction (you take the guessing with it)"
+            ),
+            atual,
+        )
+        if resposta is None or not resposta:
+            return
+        if resposta.lower() in ("auto", "none"):
+            novas = []
+        else:
+            novas = [p.strip().lower() for p in resposta.split(",") if p.strip()]
+        if novas == list(config.TRANSCRIPTION_LANGUAGES):
+            return
+        if not save_settings({"TRANSCRIPTION_LANGUAGES": novas}):
+            rumps.alert(f"Could not write the settings file:\n{settings_path()}")
+            return
+
+        # Vale JÁ, sem reiniciar: ao contrário da wake word (que outros
+        # módulos leem uma vez, na importação), o idioma é lido a cada
+        # transcrição a partir destes atributos. Fazer valer só depois
+        # de reabrir seria pedir pra pessoa reiniciar o app pra testar
+        # cada tentativa — justo no ajuste que ela mais vai querer
+        # tentar de novo.
+        config.TRANSCRIPTION_LANGUAGES = novas
+        self._apply_languages(novas)
+        rumps.alert(
+            "Languages saved: "
+            + (", ".join(novas) if novas else "auto (no restriction)")
+            + ". It already applies — no need to restart."
+        )
+
+    @rumps.clicked("iPhone connection…")
     def open_settings(self, _):
         topico = config.NTFY_TOPIC
         resumo = topico if topico else "(off — iPhone can't reach this Mac)"

@@ -34,6 +34,14 @@ pega ali; só volta a valer no frame seguinte, quando o loop principal
 retoma. Aceitável pro uso normal (ninguém fala a wake word duas vezes
 seguidas rápido assim), mas vale saber que existe.
 
+Limitação inerente a este caminho: "vIsper, cancela" (a saída não
+destrutiva do ditado, ver dictation._is_cancel) NÃO funciona aqui. A
+wake word fecha o ditado no instante em que o Porcupine reconhece o
+SOM dela — a palavra "cancela" vem depois e nunca chega a ser
+capturada, então o texto já foi mandado. Só o modo Whisper contínuo
+transcreve o trecho inteiro antes de decidir, que é o que permite
+distinguir "fecha" de "cancela".
+
 AINDA NÃO LIGADO a áudio real — ver PorcupineSession.run(), que
 espera um frame_source (iterável de frames int16 do tamanho de
 detector.frame_length) e um model (WhisperModel real ou compatível).

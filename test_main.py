@@ -906,6 +906,112 @@ class ConfiguracaoPeloAppTest(unittest.TestCase):
         fake_save.assert_not_called()
 
 
+class ConfigurarPeloMenuTest(unittest.TestCase):
+    """Wake word e idiomas ajustáveis SEM Terminal.
+
+    Quem instalou pelo .dmg não tem o repositório nem o
+    setup_visper.py na máquina — mandar essa pessoa "editar o
+    config.py" é exatamente o atrito que o .dmg existe pra tirar.
+    """
+
+    def setUp(self):
+        main.rumps.alert.reset_mock()
+        main.rumps.Window.reset_mock()
+        self._idiomas = list(main.config.TRANSCRIPTION_LANGUAGES)
+
+    def tearDown(self):
+        main.config.TRANSCRIPTION_LANGUAGES = self._idiomas
+
+    def _responder(self, texto, clicked=1):
+        main.rumps.Window.return_value.run.return_value = FakeWindowResponse(
+            clicked=clicked, text=texto
+        )
+
+    def test_os_ajustes_aparecem_no_menu(self):
+        app = _build_app()
+        titulos = [item for item in app.menu if isinstance(item, str)]
+        for esperado in ("Wake word…", "Spoken languages…", "iPhone connection…"):
+            self.assertIn(esperado, titulos)
+
+    def test_salva_a_wake_word_nova(self):
+        app = _build_app()
+        self._responder("Vésper")
+        with patch("main.save_settings", return_value=True) as fake_save:
+            app.open_wake_word(None)
+        fake_save.assert_called_once_with({"WAKE_WORD": "Vésper"})
+
+    def test_wake_word_igual_a_atual_nao_grava_nada(self):
+        app = _build_app()
+        self._responder(main.config.WAKE_WORD)
+        with patch("main.save_settings") as fake_save:
+            app.open_wake_word(None)
+        fake_save.assert_not_called()
+
+    def test_cancelar_a_janela_da_wake_word_nao_grava(self):
+        app = _build_app()
+        self._responder("Vésper", clicked=0)
+        with patch("main.save_settings") as fake_save:
+            app.open_wake_word(None)
+        fake_save.assert_not_called()
+
+    def test_salva_lista_de_idiomas(self):
+        app = _build_app()
+        self._responder("pt, en, es")
+        with patch("main.save_settings", return_value=True) as fake_save:
+            app.open_languages(None)
+        fake_save.assert_called_once_with(
+            {"TRANSCRIPTION_LANGUAGES": ["pt", "en", "es"]}
+        )
+
+    def test_auto_vira_lista_vazia(self):
+        app = _build_app()
+        self._responder("auto")
+        with patch("main.save_settings", return_value=True) as fake_save:
+            app.open_languages(None)
+        fake_save.assert_called_once_with({"TRANSCRIPTION_LANGUAGES": []})
+
+    def test_mudar_idioma_vale_na_hora_sem_reiniciar(self):
+        # O ajuste que a pessoa mais vai querer tentar de novo (é ele
+        # que conserta "só funciona em inglês") não pode exigir fechar
+        # e reabrir o app a cada tentativa.
+        app = _build_app()
+        self._responder("pt")
+        with patch("main.save_settings", return_value=True):
+            app.open_languages(None)
+        self.assertEqual(app._allowed_languages, ["pt"])
+        self.assertEqual(app._forced_language, "pt")
+
+    def test_voltar_pra_varios_idiomas_desliga_o_forcado(self):
+        app = _build_app()
+        self._responder("pt")
+        with patch("main.save_settings", return_value=True):
+            app.open_languages(None)
+        self._responder("pt, en")
+        with patch("main.save_settings", return_value=True):
+            app.open_languages(None)
+        self.assertIsNone(app._forced_language)
+        self.assertEqual(app._allowed_languages, ["pt", "en"])
+
+    def test_idioma_de_reserva_e_esquecido_ao_trocar_a_lista(self):
+        # Guardado de uma lista antiga, ele pode nem estar na nova —
+        # continuaria forçando um idioma que ela acabou de tirar.
+        app = _build_app()
+        app._last_good_language = "en"
+        self._responder("pt, es")
+        with patch("main.save_settings", return_value=True):
+            app.open_languages(None)
+        self.assertIsNone(app._last_good_language)
+
+    def test_falha_ao_gravar_avisa_em_vez_de_fingir_que_salvou(self):
+        app = _build_app()
+        self._responder("Vésper")
+        with patch("main.save_settings", return_value=False):
+            app.open_wake_word(None)
+        self.assertTrue(main.rumps.alert.called)
+        texto = " ".join(str(a) for a in main.rumps.alert.call_args[0])
+        self.assertIn("Could not write", texto)
+
+
 class SairTest(unittest.TestCase):
     def test_sair_para_a_escuta_antes_de_fechar(self):
         # Sem isso, a thread de áudio pode continuar segurando o

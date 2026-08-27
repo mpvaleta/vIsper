@@ -557,7 +557,16 @@ Módulos principais (mic local, sempre ativos):
   alimentando o mesmo `DictationSession`. Thread de escuta envolvida
   em try/except (`_listen_loop_safe`) — sem isso, stream falhando ao
   abrir (ex.: fone Bluetooth desconectou) travava `self.listening=True`
-  pra sempre, exigindo reiniciar o app. O estado "mandou" é um
+  pra sempre, exigindo reiniciar o app. **Wake word, idiomas e tópico
+  do iPhone se ajustam pelo MENU** ("Wake word…", "Spoken languages…",
+  "iPhone connection…", todos por `_ask()` → `rumps.Window`), não só
+  pelo `setup_visper.py` — quem instalou pelo `.dmg` não tem o
+  repositório nem o script na máquina, e mandar essa pessoa editar o
+  `config.py` é exatamente o atrito que o `.dmg` existe pra tirar.
+  Idioma vale NA HORA (`_apply_languages()`, chamado tanto pelo
+  `__init__` quanto pelo menu — as três derivadas mudam juntas); wake
+  word exige reabrir, porque `dictation.py`/`command_router.py` leem
+  `WAKE_WORD` uma vez na importação. O estado "mandou" é um
   FLASH (`_flash_state`, ~2,5s) e não um estado fixo: mandar é um
   evento e a escuta continua, então o azul ficava respondendo ERRADO
   a única pergunta que o ícone existe pra responder ("ele está me
@@ -660,7 +669,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 298 testes no total. Rodar com:
+- `test_*.py` — 308 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -823,7 +832,14 @@ mudar bastante antes de virar assets de produção.
    (o Porcupine já detectou a wake word pelo SOM); e mexer neles
    quebraria os dublês de modelo dos testes, que fixam a assinatura
    `transcribe(audio, language=None)`.
-11. Chunks de 4s sem sobreposição (`audio_input.AudioStream.chunks()`):
+11. **"vIsper, cancela" não funciona no modo Porcupine.** Lá a wake
+   word FECHA o ditado no instante em que o Porcupine a reconhece
+   acusticamente — a palavra "cancela" vem depois disso e nunca chega
+   a ser capturada, então o ditado já foi mandado. É inerente a fechar
+   por detecção acústica, não um descuido: o modo Whisper contínuo (o
+   padrão) transcreve o trecho inteiro antes de decidir, e é por isso
+   que só nele dá pra distinguir "fecha" de "cancela".
+12. Chunks de 4s sem sobreposição (`audio_input.AudioStream.chunks()`):
    uma palavra cortada exatamente na fronteira entre dois chunks pode
    não casar com nenhum gatilho. Conhecido, não corrigido — a correção
    (janela deslizante) muda o contrato de todo mundo que consome

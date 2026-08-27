@@ -160,7 +160,7 @@ obriga a apertar nada. Dá pra desligar tudo isso em **Settings** →
 > pra lá é o link. Se fechar antes, é só abrir o link de novo.
 
 Instalado pelo `.dmg` e sem Terminal à mão? Dá pra configurar o mesmo
-tópico pelo menu do app: **Settings…**
+tópico pelo menu do app: **iPhone connection…**
 
 Prefere a Siri e o Apple Watch em vez de um ícone? Tem uma receita pro
 app Atalhos em [`ios/ATALHO_IPHONE.md`](ios/ATALHO_IPHONE.md) — funciona
@@ -287,8 +287,18 @@ macOS usa.
 
 ## Ajustar o comportamento
 
-O que muda o dia a dia se configura pelo `python3 setup_visper.py` ou
-pelo menu **Settings…** do app. Os padrões (e as opções mais raras)
+O que muda o dia a dia se configura pelo `python3 setup_visper.py`
+**ou direto pelo menu do app** — sem Terminal, o que importa pra quem
+instalou pelo `.dmg` e não tem o repositório na máquina:
+
+| Item do menu | Muda |
+|---|---|
+| **Wake word…** | A palavra de ativação (precisa reabrir o app) |
+| **Spoken languages…** | Os idiomas que você fala — **vale na hora**, sem reabrir |
+| **iPhone connection…** | O tópico do ntfy que liga o iPhone a este Mac |
+| **Microphone ▸** | Qual microfone usar (ou detectar sozinho) |
+
+Os padrões, e as opções mais raras que só se ajustam por arquivo,
 estão no `config.py`:
 
 - `WAKE_WORD` — a palavra de ativação
@@ -420,7 +430,7 @@ Honestidade sobre o que foi validado de verdade:
 
 | Peça | Como foi validada |
 |---|---|
-| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 298 testes automatizados |
+| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 308 testes automatizados |
 | App de iPhone (`docs/`) | 39 testes num navegador de verdade (Chromium), a cada push |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |
