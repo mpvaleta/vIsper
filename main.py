@@ -145,6 +145,7 @@ class VisperApp(rumps.App):
             send_action=actions.handle_done,
             on_open=self._on_dictation_open,
             on_send=self._on_dictation_send,
+            on_cancel=self._on_dictation_cancel,
         )
 
         # O modelo do Whisper é carregado numa THREAD, não aqui.
@@ -316,6 +317,15 @@ class VisperApp(rumps.App):
     def _on_dictation_send(self):
         self._set_state("sent")
         self._play_dictation_sound(config.DICTATION_SEND_SOUND)
+
+    def _on_dictation_cancel(self):
+        """"vIsper, cancela" — o ditado foi jogado fora, nada foi
+        mandado. Volta direto pro estado de escuta (não passa por
+        "sent", que quer dizer o oposto) e toca um som DIFERENTE: se
+        cancelar soasse igual a mandar, a dúvida que o cancelamento
+        existe pra tirar continuaria de pé."""
+        self._set_state("listening" if self.listening else "stopped")
+        self._play_dictation_sound(config.DICTATION_CANCEL_SOUND)
 
     # ------------------------------------------------------------------
     # Carregamento do modelo (em thread — ver __init__)

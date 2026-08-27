@@ -60,6 +60,25 @@ AI_TRIGGERS = {
 # então "over" não confunde com "however"/"moreover"/"cover".
 CLOSE_TRIGGERS = ["câmbio", "over"]
 
+# Como DESISTIR de um ditado em vez de mandar — a saída de emergência
+# pra quando a transcrição saiu errada e você percebeu antes de fechar.
+# Sem isso o ditado só tinha uma saída, e ela era a destrutiva: mandar.
+#
+# Só vale LOGO DEPOIS da wake word: "vIsper, cancela", nessa ordem e
+# coladas. Isso não é preciosismo — "cancela"/"cancel" são palavras
+# normais do dia a dia (ao contrário de "câmbio"/"over"), então bastar
+# a palavra em qualquer lugar do trecho faria "preciso cancelar a
+# reserva, vIsper" (fechar um ditado que por acaso falava em cancelar)
+# apagar tudo em vez de mandar. Com a adjacência, essa frase manda
+# normalmente e só o comando de verdade cancela.
+#
+# Casam como PALAVRA INTEIRA (ver text_utils.py) e SEM tolerância a
+# erro de transcrição — mesma regra do fechamento, e pelo mesmo
+# motivo: os dois desfechos são irreversíveis (um manda, o outro
+# apaga), então na dúvida é melhor não fazer nada e esperar você
+# repetir.
+CANCEL_TRIGGERS = ["cancela", "cancelar", "cancel", "esquece", "forget it"]
+
 # Tópico do ntfy (https://ntfy.sh) que o app de iPhone usa pra mandar
 # comando pro Mac de qualquer lugar (não só na mesma Wi-Fi) — ver
 # relay_listener.py.
@@ -213,6 +232,11 @@ PREFERRED_INPUT_DEVICES = [
 DICTATION_SOUNDS_ENABLED = True
 DICTATION_OPEN_SOUND = "Pop"    # toca quando o ditado ABRE (IA lançada, começou a ouvir)
 DICTATION_SEND_SOUND = "Glass"  # toca quando o ditado FECHA com conteúdo (colou + apertou Enter)
+# Som diferente dos outros dois de propósito: "descartei" precisa ser
+# ouvido como uma coisa DIFERENTE de "mandei", senão você fica sem
+# saber se o texto foi embora ou não — que é justamente a dúvida que
+# o cancelamento existe pra resolver.
+DICTATION_CANCEL_SOUND = "Funk"  # toca quando você cancela o ditado de propósito
 
 
 def transcription_hotwords() -> str:
@@ -235,6 +259,7 @@ def transcription_hotwords() -> str:
     for triggers in AI_TRIGGERS.values():
         words.extend(triggers)
     words.extend(CLOSE_TRIGGERS)
+    words.extend(CANCEL_TRIGGERS)
     # dict.fromkeys: dedup preservando a ordem (wake word primeiro).
     return ", ".join(dict.fromkeys(w for w in words if w))
 

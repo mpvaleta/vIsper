@@ -242,6 +242,40 @@ class FindWordTest(unittest.TestCase):
         self.assertIsNone(find_word("qualquer coisa", ""))
 
 
+class StartsWithWordTest(unittest.TestCase):
+    """Existe pro cancelamento ("vIsper, cancela") poder exigir
+    ADJACÊNCIA em vez de "a palavra em algum lugar do trecho" — ver
+    dictation._is_cancel()."""
+
+    def test_casa_no_comeco(self):
+        self.assertTrue(tu.starts_with_word("cancela isso", "cancela"))
+
+    def test_ignora_pontuacao_e_espaco_antes(self):
+        self.assertTrue(tu.starts_with_word("  , cancela", "cancela"))
+
+    def test_ignora_acento_e_caixa(self):
+        self.assertTrue(tu.starts_with_word("CÂMBIO agora", "cambio"))
+
+    def test_nao_casa_no_meio(self):
+        self.assertFalse(
+            tu.starts_with_word("preciso cancelar isso", "cancelar")
+        )
+
+    def test_nao_casa_como_prefixo_de_outra_palavra(self):
+        # "cancelamento" começa com "cancela", mas não É "cancela".
+        self.assertFalse(
+            tu.starts_with_word("cancelamento da reserva", "cancela")
+        )
+
+    def test_frase_de_varias_palavras(self):
+        self.assertTrue(tu.starts_with_word("forget it please", "forget it"))
+        self.assertFalse(tu.starts_with_word("please forget it", "forget it"))
+
+    def test_vazio_nunca_casa(self):
+        self.assertFalse(tu.starts_with_word("qualquer coisa", ""))
+        self.assertFalse(tu.starts_with_word("", "cancela"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

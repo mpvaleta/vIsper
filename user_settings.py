@@ -147,6 +147,7 @@ VALIDATORS = {
     "PORCUPINE_ACCESS_KEY": _is_str,
     "PORCUPINE_KEYWORD_PATH": _is_str,
     "CLOSE_TRIGGERS": _is_str_list,
+    "CANCEL_TRIGGERS": _is_str_list,
     "TRANSCRIPTION_LANGUAGES": _is_lang_code_list,
     "LANGUAGE_CONFIDENCE_THRESHOLD": _is_probability,
     "FUZZY_MATCH_THRESHOLD": _is_match_ratio,
@@ -157,6 +158,7 @@ VALIDATORS = {
     "DICTATION_SOUNDS_ENABLED": _is_bool,
     "DICTATION_OPEN_SOUND": _is_str,
     "DICTATION_SEND_SOUND": _is_str,
+    "DICTATION_CANCEL_SOUND": _is_str,
 }
 
 

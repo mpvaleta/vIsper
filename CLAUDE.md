@@ -194,6 +194,30 @@ não bug daqui).
   que são comuns em qualquer ditado em inglês. `text_utils.py`
   também dobra acento (câmbio/cambio contam igual), pra tolerar o
   Whisper transcrever com ou sem acento.
+- **Cancelar exige ADJACÊNCIA à wake word ("vIsper, cancela"), não só
+  a palavra em algum lugar do trecho.** O ditado só tinha uma saída, e
+  ela era a destrutiva: mandar. Transcrição erra, então precisava
+  existir um jeito de desistir sem matar o app —
+  `config.CANCEL_TRIGGERS` (`cancela`, `cancelar`, `cancel`,
+  `esquece`, `forget it`) resolvido por
+  `dictation._is_cancel()`. Mas essas palavras são o OPOSTO de
+  "câmbio"/"over": são comuns em fala normal. Bastar a palavra em
+  qualquer lugar do trecho faria "preciso cancelar a reserva, vIsper"
+  (fechar um ditado que por acaso fala em cancelar) APAGAR tudo em vez
+  de mandar — o oposto exato do pedido, e irreversível. Por isso a
+  regra é `text_utils.starts_with_word()` sobre o que vem DEPOIS da
+  wake word: essa frase manda normalmente, e só o comando de verdade
+  cancela. Dois detalhes que não podem ser mexidos sem repensar tudo:
+  (a) o cancelamento é checado ANTES do fechamento, nas DUAS pontas
+  (no trecho que fecha e no `leftover` do que abre) — "vIsper cancela"
+  contém a wake word, que também é gatilho de fechamento, então na
+  ordem errada pedir pra cancelar MANDARIA; (b) o som do cancelamento
+  (`config.DICTATION_CANCEL_SOUND`, callback `on_cancel`) é DIFERENTE
+  do de mandar de propósito — sem sinal distinto não dá pra saber se o
+  texto foi embora ou foi descartado, que é justamente a dúvida que o
+  cancelamento existe pra tirar. Casamento EXATO, sem tolerância a
+  erro de transcrição, mesma regra do fechamento e pelo mesmo motivo:
+  os dois desfechos são irreversíveis.
 
 - **Configuração pessoal mora FORA do repositório**
   (`user_settings.py` → `~/Library/Application Support/vIsper/settings.json`).
@@ -423,7 +447,9 @@ Módulos principais (mic local, sempre ativos):
     `_fold_with_index_map()` guarda, pra cada caractere do texto
     dobrado, de qual posição do original ele veio — **qualquer função
     nova que ache posição no dobrado e fatie o original TEM que usar
-    esse mapa**. 35 testes.
+    esse mapa**. `starts_with_word()` é a mais nova, e existe só pra
+    o cancelamento poder exigir ADJACÊNCIA à wake word — ver a
+    decisão sobre cancelar acima. 55 testes.
 - `audio_input.py` — lista/detecta microfones (`guess_preferred_device()`,
   `classify_device()`, orientados por `config.PREFERRED_INPUT_DEVICES` —
   casamento por SUBSTRING simples, não palavra inteira, porque nome de
@@ -464,7 +490,7 @@ Módulos principais (mic local, sempre ativos):
   tratar o retorno como string. A escolha da IA é por POSIÇÃO do
   apelido na fala (mais cedo ganha), com desempate por comprimento —
   ver o raciocínio e o bug que motivou cada metade em "Decisões de
-  arquitetura". 13 testes dedicados.
+  arquitetura". 24 testes dedicados.
 - `dictation.py` — a máquina de estados ocioso/ditando. Fecha com a
   wake word OU qualquer `CLOSE_TRIGGERS`. A mensagem final é o BUFFER
   INTERNO (populado por chamadas anteriores de `.handle()`) **mais**
@@ -485,10 +511,11 @@ Módulos principais (mic local, sempre ativos):
   agora é que o texto da chamada que ABRE e o texto da chamada que
   FECHA podem os dois ter conteúdo real misturado com o gatilho — e
   podem até ser a MESMA chamada —, não só as chamadas do meio.
-  `DictationSession` aceita `on_open`/`on_send` opcionais (callbacks
-  sem argumento, só feedback — não afetam a máquina de estados;
-  `on_send` NÃO dispara no caso "cancelado"), usados por `main.py` pra
-  tocar o earcon. 22 testes dedicados.
+  `DictationSession` aceita `on_open`/`on_send`/`on_cancel`
+  opcionais (callbacks sem argumento, só feedback — não afetam a
+  máquina de estados; `on_send` NÃO dispara quando o fechamento não
+  tinha nada pra mandar), usados por `main.py` pra tocar o earcon.
+  33 testes dedicados.
 - `actions.py` — as ações de verdade (abrir app/URL, colar texto,
   apertar Enter) via `subprocess`/`osascript`. Todo `subprocess.run()`
   usa `check=True` — antes, uma falha (ex.: permissão de
@@ -530,7 +557,7 @@ Módulos principais (mic local, sempre ativos):
   alimentando o mesmo `DictationSession`. Thread de escuta envolvida
   em try/except (`_listen_loop_safe`) — sem isso, stream falhando ao
   abrir (ex.: fone Bluetooth desconectou) travava `self.listening=True`
-  pra sempre, exigindo reiniciar o app. 12 testes
+  pra sempre, exigindo reiniciar o app. 52 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -625,7 +652,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 271 testes no total. Rodar com:
+- `test_*.py` — 291 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -863,8 +890,6 @@ ideias que surgiram, não um compromisso:
 - Feedback VISUAL (o mascote mudando de estado na barra de menu) —
   o sonoro já existe (earcon em `config.DICTATION_*_SOUND`, ver
   abaixo), mas continua sem nada visual além do texto do submenu.
-- Palavra de cancelar (ex. "vIsper, cancela") pra descartar o ditado
-  em vez de mandar.
 - Envio automático depois de alguns segundos de silêncio, como rede
   de segurança pra quando esquecer de repetir a wake word.
 - Comando que manda direto o que já está copiado (pula o ditado).

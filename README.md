@@ -311,9 +311,12 @@ estão no `config.py`:
   acima.
 - `LANGUAGE_CONFIDENCE_THRESHOLD` — abaixo disso o palpite de idioma
   é descartado e o trecho é transcrito de novo (0.5 padrão)
+- `CANCEL_TRIGGERS` — as palavras que descartam o ditado quando vêm
+  logo depois da palavra de ativação (`"cancela"`, `"esquece"`…)
 - `RELAY_BLOCKED_AIS` — o que o iPhone não pode abrir (ver Segurança)
-- `DICTATION_OPEN_SOUND` / `DICTATION_SEND_SOUND` — o som curto de
-  abrir/mandar. Usa sons que já vêm no macOS (Pop, Glass, Tink, Ping…).
+- `DICTATION_OPEN_SOUND` / `DICTATION_SEND_SOUND` /
+  `DICTATION_CANCEL_SOUND` — o som curto de abrir/mandar/cancelar.
+  Usa sons que já vêm no macOS (Pop, Glass, Funk, Tink, Ping…).
   Útil de fone: dá pra saber que abriu/mandou sem olhar pra tela.
   `DICTATION_SOUNDS_ENABLED = False` desliga.
 
@@ -330,6 +333,22 @@ pelo `setup_visper.py`, que guarda tudo fora do repositório.
 | "do segundo trimestre, por favor" | Continua acumulando |
 | "câmbio" | Cola tudo no chat e aperta Enter (ícone vira azul) |
 
+### Desistir sem mandar
+
+Se a transcrição saiu errada, ou você mudou de ideia no meio:
+
+> "**vIsper, cancela**"
+
+O ditado inteiro é jogado fora — nada é colado, nada é enviado — e o
+vIsper volta a esperar um comando novo. O som é **diferente** do som de
+enviar, de propósito: você precisa conseguir saber, sem olhar, se o
+texto foi embora ou foi descartado.
+
+Serve também `cancelar`, `cancel`, `esquece` e `forget it`. A palavra
+precisa vir **logo depois** da palavra de ativação — é o que permite
+ditar uma mensagem que fala em cancelar ("preciso cancelar a reserva")
+sem que ela se apague sozinha.
+
 Dois avisos que importam:
 
 1. Só é reconhecido o que vier **depois** da palavra de ativação, pra
@@ -337,7 +356,8 @@ Dois avisos que importam:
 2. Durante o ditado, se a palavra de ativação ou um `CLOSE_TRIGGERS`
    aparecer sem querer no meio do que você está falando, a sessão corta
    ali e manda cedo demais. Palavras raras reduzem muito isso, mas não
-   zeram — o Porcupine resolve melhor.
+   zeram — o Porcupine resolve melhor. (Aconteceu? "vIsper, cancela"
+   antes de repetir.)
 
 ---
 
@@ -400,7 +420,7 @@ Honestidade sobre o que foi validado de verdade:
 
 | Peça | Como foi validada |
 |---|---|
-| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 271 testes automatizados |
+| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 291 testes automatizados |
 | App de iPhone (`docs/`) | 39 testes num navegador de verdade (Chromium), a cada push |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |

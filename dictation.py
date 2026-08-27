@@ -13,6 +13,8 @@ Fluxo:
   "mais uma frase aqui"    -> também vai pro buffer
   "câmbio" / "over"        -> cola o buffer inteiro no chat, aperta
   (ou "vIsper" de novo)       Enter, volta pro modo ocioso
+  "vIsper, cancela"        -> joga o buffer fora SEM colar nada e
+                              volta pro modo ocioso
 
 Isso tudo pode caber numa respiração só também — "vIsper claude qual é
 a previsão do tempo over" abre, dita e manda de uma vez, num único
@@ -36,8 +38,13 @@ novos (cada palavra que ele reconhece precisa do próprio treino em
 console.picovoice.ai — ver nota em wake_word_porcupine.py).
 """
 
-from config import WAKE_WORD, CLOSE_TRIGGERS
-from text_utils import contains_word, split_before_any
+from config import WAKE_WORD, CLOSE_TRIGGERS, CANCEL_TRIGGERS
+from text_utils import (
+    contains_word,
+    split_after_word,
+    split_before_any,
+    starts_with_word,
+)
 
 # Tudo que fecha um ditado: a própria wake word de novo, mais os
 # CLOSE_TRIGGERS. Uma lista só, pra checagem e recorte não poderem
@@ -50,8 +57,36 @@ def _has_close_trigger(text: str) -> bool:
     return any(contains_word(text, word) for word in CLOSE_WORDS)
 
 
+def _is_cancel(text: str) -> bool:
+    """"vIsper, cancela" — desistir do ditado em vez de mandar.
+
+    Exige a palavra de cancelar IMEDIATAMENTE depois da wake word, não
+    só em algum lugar do mesmo trecho. A diferença não é preciosismo,
+    é o que separa comando de conversa: "cancela"/"cancel" são
+    palavras normais do dia a dia, então "preciso cancelar a reserva,
+    vIsper" (fechar um ditado que POR ACASO falava em cancelar) teria
+    virado "joga tudo fora" — o oposto exato do pedido, e
+    irreversível. Com a adjacência, essa frase fecha e manda
+    normalmente, e só "vIsper, cancela" cancela.
+
+    Ver config.CANCEL_TRIGGERS pro raciocínio da escolha das palavras.
+    """
+    resto = split_after_word(text, WAKE_WORD)
+    if not resto:
+        return False
+    return any(starts_with_word(resto, word) for word in CANCEL_TRIGGERS)
+
+
 class DictationSession:
-    def __init__(self, router, paste_action, send_action, on_open=None, on_send=None):
+    def __init__(
+        self,
+        router,
+        paste_action,
+        send_action,
+        on_open=None,
+        on_send=None,
+        on_cancel=None,
+    ):
         """
         router: CommandRouter — decide se/qual IA abrir
         paste_action: função(texto) -> None — cola o texto no chat
@@ -61,15 +96,23 @@ class DictationSession:
                  (ex.: som) — não afeta a máquina de estados.
         on_send: função() -> None opcional, chamada quando o ditado
                  FECHA COM CONTEÚDO de verdade (colou + mandou Enter).
-                 NÃO é chamada no caso "cancelado" (fechou sem nada
-                 ditado) — silêncio já é feedback razoável pra "nada
+                 NÃO é chamada quando o fechamento não tinha nada pra
+                 mandar — silêncio já é feedback razoável pra "nada
                  aconteceu".
+        on_cancel: função() -> None opcional, chamada quando você
+                 CANCELA de propósito ("vIsper, cancela"). Aqui o
+                 feedback é obrigatório do ponto de vista de uso, não
+                 opcional como nos outros: sem sinal nenhum não dá pra
+                 saber se o texto foi mandado ou jogado fora — que é
+                 exatamente a dúvida que o cancelamento existe pra
+                 tirar. main.py toca um som DIFERENTE do de mandar.
         """
         self.router = router
         self.paste_action = paste_action
         self.send_action = send_action
         self.on_open = on_open
         self.on_send = on_send
+        self.on_cancel = on_cancel
         self.dictating = False
         self.buffer = []
 
@@ -112,17 +155,43 @@ class DictationSession:
             # mandado pra IA. As duas pontas (abertura e fechamento) já
             # tinham sido corrigidas separadamente; faltava o caso em
             # que as duas caem no MESMO trecho.
+            # Cancelar vem ANTES de fechar aqui pelo mesmo motivo de
+            # baixo: "vIsper cancela" contém a wake word, que também é
+            # gatilho de fechamento — sem esta ordem, o fechamento
+            # ganharia e mandaria justamente o que você pediu pra
+            # jogar fora.
+            if _is_cancel(leftover):
+                return f"{opened}; {self._cancel()}"
             if _has_close_trigger(leftover):
                 return f"{opened}; {self._close(leftover)}"
 
             self.buffer = [leftover]
             return opened
 
+        # ORDEM IMPORTA: a wake word é gatilho de fechamento, e
+        # "vIsper cancela" contém a wake word. Se o fechamento fosse
+        # checado primeiro, pedir pra cancelar MANDARIA o ditado — o
+        # oposto exato do que foi pedido, e irreversível.
+        if _is_cancel(text):
+            return self._cancel()
+
         if _has_close_trigger(text):
             return self._close(text)
 
         self.buffer.append(text)
         return "ditando…"
+
+    def _cancel(self):
+        """Joga o ditado fora sem colar nada. Nenhuma ação de verdade
+        acontece — nada é colado, nenhum Enter é apertado."""
+        perdido = len(" ".join(self.buffer).strip())
+        self.dictating = False
+        self.buffer = []
+        if self.on_cancel:
+            self.on_cancel()
+        if not perdido:
+            return "cancelado (não havia nada ditado)"
+        return f"cancelado — {perdido} caractere(s) descartados, nada foi mandado"
 
     def _close(self, text: str):
         """

@@ -21,6 +21,7 @@ class DictationSessionTest(unittest.TestCase):
         if with_sounds:
             kwargs["on_open"] = lambda: calls.append("som_abriu")
             kwargs["on_send"] = lambda: calls.append("som_mandou")
+            kwargs["on_cancel"] = lambda: calls.append("som_cancelou")
         return DictationSession(
             router=router,
             paste_action=lambda t: calls.append(("colou", t)),
@@ -241,6 +242,135 @@ class DictationSessionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CancelamentoTest(unittest.TestCase):
+    """"vIsper, cancela" — a saída NÃO destrutiva do ditado.
+
+    Antes disso o ditado só tinha uma saída, e ela mandava: se a
+    transcrição saísse errada, a única forma de não mandar era matar o
+    app. O risco desta funcionalidade é o simétrico (cancelar sem
+    querer e perder o que foi ditado), e é por isso que a palavra de
+    cancelar precisa vir COLADA na wake word — os testes de falso
+    positivo abaixo são a parte que importa.
+    """
+
+    def _build_session(self, calls, with_sounds=False):
+        ai_actions = {"claude": lambda: calls.append("abriu_claude")}
+        router = CommandRouter(ai_actions)
+        kwargs = {}
+        if with_sounds:
+            kwargs["on_send"] = lambda: calls.append("som_mandou")
+            kwargs["on_cancel"] = lambda: calls.append("som_cancelou")
+        return DictationSession(
+            router=router,
+            paste_action=lambda t: calls.append(("colou", t)),
+            send_action=lambda: calls.append("mandou_enter"),
+            **kwargs,
+        )
+
+    def test_cancela_joga_o_ditado_fora_sem_colar_nem_mandar(self):
+        calls = []
+        session = self._build_session(calls)
+        session.handle("vIsper claude")
+        session.handle("uma ideia que eu já mudei de ideia")
+        resultado = session.handle("vIsper cancela")
+
+        self.assertFalse(session.dictating)
+        self.assertEqual(session.buffer, [])
+        self.assertNotIn("mandou_enter", calls)
+        self.assertFalse(any(isinstance(c, tuple) for c in calls))
+        self.assertIn("cancelado", resultado)
+
+    def test_cancelar_volta_pro_ocioso_e_deixa_ditar_de_novo(self):
+        calls = []
+        session = self._build_session(calls)
+        session.handle("vIsper claude")
+        session.handle("texto descartado")
+        session.handle("vIsper cancela")
+
+        session.handle("vIsper claude")
+        session.handle("agora vai")
+        session.handle("over")
+        # O que foi cancelado não pode voltar junto com o próximo.
+        self.assertIn(("colou", "agora vai"), calls)
+
+    def test_cancelar_toca_um_som_DIFERENTE_de_mandar(self):
+        calls = []
+        session = self._build_session(calls, with_sounds=True)
+        session.handle("vIsper claude")
+        session.handle("alguma coisa")
+        session.handle("vIsper cancela")
+        self.assertIn("som_cancelou", calls)
+        self.assertNotIn("som_mandou", calls)
+
+    def test_cancelar_sem_nada_ditado_ainda_avisa(self):
+        calls = []
+        session = self._build_session(calls, with_sounds=True)
+        session.handle("vIsper claude")
+        resultado = session.handle("vIsper cancela")
+        self.assertFalse(session.dictating)
+        self.assertIn("cancelado", resultado)
+        # Feedback de "não tinha nada mesmo" também é feedback: sem ele
+        # dá pra achar que o comando não foi ouvido.
+        self.assertIn("som_cancelou", calls)
+
+    def test_falar_em_cancelar_NO_MEIO_do_ditado_e_conteudo(self):
+        # O caso que fez a regra ser adjacência e não "a palavra em
+        # qualquer lugar do trecho": aqui a pessoa está ditando uma
+        # mensagem que POR ACASO fala em cancelar. Isso tem que ser
+        # mandado, não apagado.
+        calls = []
+        session = self._build_session(calls)
+        session.handle("vIsper claude")
+        session.handle("preciso cancelar a reserva de amanhã")
+        session.handle("over")
+        self.assertIn(("colou", "preciso cancelar a reserva de amanhã"), calls)
+
+    def test_cancelar_no_fim_da_frase_ainda_MANDA_em_vez_de_apagar(self):
+        # Pior versão do caso acima: a wake word fecha o ditado no
+        # MESMO trecho em que a palavra "cancelar" aparece — só que
+        # antes dela, não depois. Fechamento normal.
+        calls = []
+        session = self._build_session(calls)
+        session.handle("vIsper claude")
+        session.handle("preciso cancelar a reserva vIsper")
+        self.assertIn(("colou", "preciso cancelar a reserva"), calls)
+        self.assertIn("mandou_enter", calls)
+
+    def test_cancela_sozinho_sem_a_wake_word_e_conteudo(self):
+        calls = []
+        session = self._build_session(calls)
+        session.handle("vIsper claude")
+        session.handle("cancela")
+        session.handle("over")
+        self.assertIn(("colou", "cancela"), calls)
+
+    def test_cancelar_na_MESMA_respiracao_que_abriu(self):
+        # "vIsper claude ... vIsper cancela" numa tacada — improvável,
+        # mas é o mesmo caminho de código do abre-e-fecha-junto, então
+        # tem que se comportar igual: abre, e não manda nada.
+        calls = []
+        session = self._build_session(calls)
+        resultado = session.handle("vIsper claude isso aqui vIsper cancela")
+        self.assertIn("abriu_claude", calls)
+        self.assertFalse(session.dictating)
+        self.assertNotIn("mandou_enter", calls)
+        self.assertIn("cancelado", resultado)
+
+    def test_variacoes_de_pontuacao_e_acento_da_transcricao(self):
+        # O Whisper transcreve com vírgula/ponto e com ou sem
+        # maiúscula; nenhuma dessas formas pode deixar de cancelar.
+        for fala in ("vIsper, cancela", "Visper. Cancela.", "visper cancelar",
+                     "vIsper esquece isso"):
+            with self.subTest(fala=fala):
+                calls = []
+                session = self._build_session(calls)
+                session.handle("vIsper claude")
+                session.handle("conteúdo qualquer")
+                session.handle(fala)
+                self.assertFalse(session.dictating, fala)
+                self.assertNotIn("mandou_enter", calls)
 
 
 class AberturaToleranteTest(unittest.TestCase):
