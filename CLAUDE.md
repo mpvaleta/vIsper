@@ -216,18 +216,34 @@ não bug daqui).
   fixo e o único retorno era notificação, que some sozinha em segundos
   — não dava pra responder a pergunta mais básica ("ele está me
   ouvindo agora?") sem falar uma frase de teste e torcer.
-  **Já passou por DUAS versões**, e a primeira ensinou uma lição que
-  vale registrar: começou como EMOJI (⏳🎙🟢🔴🔵🟠) como texto do
-  título — funcionava, mas a Valeta testou de verdade e apontou que
-  "as cores que você falou não estão funcionando": emoji usa as cores
-  do FONTE da Apple, não as da paleta semântica documentada (🟠 não é
-  terracota; 🎙 não tem cor de estado nenhuma). Agora são PNGs de
-  círculo sólido de verdade (`status_icons/*.png`, gerados por
-  `design/generate_status_icons.py` com zlib+struct puro — sem Pillow,
-  sem dependência nova só pra 6 imagens pequenas), nas MESMAS cores
-  hex de `design/layouts_mockup.html` — `test_status_icons.py` fecha o
-  círculo comparando o PIXEL de verdade do PNG contra o hex do
-  mockup, não só a intenção. **Sem `template=True`** (rumps.App.icon,
+  **Já passou por TRÊS versões, e cada uma consertou o que a anterior
+  quebrou — a lição que vale registrar é que FORMA e COR são dois
+  eixos separados e acertar um não vale sacrificar o outro:**
+  (1) EMOJI (⏳🎙🟢🔴🔵🟠) como texto do título — funcionava, mas a
+  Valeta testou de verdade e apontou que "as cores que você falou não
+  estão funcionando": emoji usa as cores do FONTE da Apple, não as da
+  paleta semântica documentada (🟠 não é terracota; 🎙 não tem cor de
+  estado nenhuma). (2) CÍRCULO colorido sólido — cor certa, mas jogou
+  a identidade fora, e a resposta dela foi "os ícones deveriam seguir
+  o briefing inicial". (3) A SILHUETA DO MASCOTE na cor do estado
+  (atual): a forma é a MESMA de `design/menubar_icon_template.svg` (o
+  briefing) e nunca muda, porque é o que identifica o vIsper na
+  barra; a cor é a paleta semântica, e é só ela que muda com o estado.
+  Os PNGs (`status_icons/*.png`) saem de
+  `design/generate_status_icons.py`, escrito com zlib+struct puro —
+  sem Pillow, sem cairosvg, sem dependência nova só pra 6 imagens
+  pequenas. Como não dá pra "importar" um SVG sem dependência, as
+  primitivas do briefing estão TRANSCRITAS em `SHAPES` com os números
+  literais do arquivo (mexeu no SVG, mexe lá e rode de novo), e são
+  rasterizadas por distância com sinal — é o que dá antialiasing de
+  graça sem biblioteca gráfica. `test_status_icons.py` fecha os dois
+  círculos contra os BYTES do PNG: a cor contra o hex de
+  `layouts_mockup.html`, e pontos do desenho contra a geometria de
+  `menubar_icon_template.svg` — inclusive o VÃO entre as duas antenas,
+  que é justamente o ponto onde um círculo teria tinta e o mascote
+  não tem. O PNG precisa ser QUADRADO: o rumps fixa a imagem em 20×20
+  pontos (`image.setSize_((20, 20))`, sem como passar outro valor pela
+  propriedade `.icon`), então imagem não-quadrada sairia espremida. **Sem `template=True`** (rumps.App.icon,
   parâmetro `template`) de propósito: template forçaria monocromático
   conforme claro/escuro, apagando a cor de novo pelo mesmo motivo do
   emoji, só que por outro caminho — conferido no source do rumps

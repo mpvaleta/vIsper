@@ -68,18 +68,25 @@ MODEL_SIZE = "base"  # tiny/base/small — maior = mais preciso, mais lento
 # básica de todas — "ele está me ouvindo agora?" — sem falar uma frase
 # de teste e torcer.
 #
-# CÍRCULO COLORIDO DE VERDADE, não emoji. A primeira versão usava
-# emoji (⏳🎙🟢🔴🔵🟠) como o TÍTULO da barra de menu — funcionava, mas
-# as cores eram as do FONTE DE EMOJI da Apple, não as da paleta
-# semântica documentada (design/layouts_mockup.html): 🟠 não é
-# terracota, 🎙 não tem cor de estado nenhuma. As cores abaixo são as
-# MESMAS (mesmo hex) do mockup — cinza=ocioso, âmbar=carregando,
-# verde=escutando, coral=ditando, azul=mandou, terracota=erro. Os
-# PNGs (status_icons/, gerados por design/generate_status_icons.py)
-# são círculos sólidos SEM modo template — se virassem template o
-# macOS forçaria monocromático (preto/branco conforme claro/escuro) e
-# a cor documentada sumiria de novo, o mesmo problema do emoji só que
-# por outro caminho.
+# A SILHUETA DO MASCOTE colorida, não emoji e não um círculo liso.
+# Dois eixos que comunicam coisas diferentes: a FORMA é sempre a
+# mesma (o desenho de design/menubar_icon_template.svg — é o que
+# identifica o vIsper entre os outros ícones da barra), e só a COR
+# muda com o estado.
+#
+# As duas versões anteriores erraram um eixo cada. Emoji
+# (⏳🎙🟢🔴🔵🟠) como TÍTULO: as cores eram as do FONTE DE EMOJI da
+# Apple, não as da paleta documentada (design/layouts_mockup.html) —
+# 🟠 não é terracota, 🎙 não tem cor de estado nenhuma. Círculo
+# sólido: cor certa, identidade jogada fora. As cores abaixo são as
+# MESMAS (mesmo hex) do mockup — cinza=parado, âmbar=carregando,
+# verde=escutando, coral=ditando, azul=mandou, terracota=erro.
+#
+# Os PNGs (status_icons/, gerados por
+# design/generate_status_icons.py) entram SEM modo template: template
+# forçaria monocromático (preto/branco conforme claro/escuro) e a cor
+# documentada sumiria de novo — o mesmo problema do emoji, só que por
+# outro caminho.
 # ---------------------------------------------------------------------
 _ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "status_icons")
 STATUS_ICONS = {
@@ -120,7 +127,7 @@ class VisperApp(rumps.App):
         # valor pra nomear a pasta de Application Support dele
         # (rumps.application_support) — deixar um caractere de estado
         # ali criaria (inofensivamente, mas sem sentido) uma pasta com
-        # nome de emoji. icon= já entra com o círculo de "carregando":
+        # nome de emoji. icon= já entra com o ícone de "carregando":
         # sem isso o app ficava com o nome como texto até o primeiro
         # _set_state(), um instante de UI errada.
         super().__init__(

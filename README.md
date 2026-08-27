@@ -15,7 +15,7 @@ usar:
 
 1. **Mac:** baixe o DMG (aba Actions → última execução ✅ → Artifacts),
    arraste pra Applications, **botão direito → Abrir** na primeira vez.
-2. Espere o círculo **âmbar** da barra de menu virar **cinza** (primeira
+2. Espere o ícone **âmbar** da barra de menu virar **cinza** (primeira
    vez baixa o modelo, ~150 MB), clique → **Start listening**, e
    autorize Microfone e Acessibilidade quando o macOS pedir.
 3. Fale: **"vIsper claude oi over"**. Pronto — o resto deste README é
@@ -65,7 +65,7 @@ código. Pra baixar:
    Apple (US$ 99/ano, contra o custo zero deste projeto). Só na
    primeira vez; depois o duplo clique funciona.
 
-4. Aparece um círculo **âmbar** na barra de menu. Na primeiríssima
+4. Aparece o mascote em **âmbar** na barra de menu. Na primeiríssima
    execução ele baixa o modelo de transcrição (~150 MB), então precisa
    de internet e pode demorar alguns minutos. Quando virar **cinza**,
    está pronto.
@@ -83,8 +83,9 @@ Pronto.
 
 ### O que o ícone está te dizendo
 
-O ícone da barra de menu é um círculo colorido — a cor É o estado, nas
-mesmas cores do resto do design:
+O ícone da barra de menu é o mascote do vIsper, e **a cor dele É o
+estado** — a forma nunca muda (é como você acha ele entre os outros
+ícones da barra), só a cor:
 
 | Cor | Quer dizer |
 |---|---|
