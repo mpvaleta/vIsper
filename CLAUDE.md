@@ -557,7 +557,15 @@ Módulos principais (mic local, sempre ativos):
   alimentando o mesmo `DictationSession`. Thread de escuta envolvida
   em try/except (`_listen_loop_safe`) — sem isso, stream falhando ao
   abrir (ex.: fone Bluetooth desconectou) travava `self.listening=True`
-  pra sempre, exigindo reiniciar o app. 52 testes
+  pra sempre, exigindo reiniciar o app. O estado "mandou" é um
+  FLASH (`_flash_state`, ~2,5s) e não um estado fixo: mandar é um
+  evento e a escuta continua, então o azul ficava respondendo ERRADO
+  a única pergunta que o ícone existe pra responder ("ele está me
+  ouvindo agora?") até acontecer outra coisa — podiam ser minutos. O
+  timer relê `_current_state` na hora de voltar em vez de capturar o
+  estado de antes: entre o flash e o disparo dá tempo de parar a
+  escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
+  desfeito por um timer velho. 59 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -652,7 +660,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 291 testes no total. Rodar com:
+- `test_*.py` — 298 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que

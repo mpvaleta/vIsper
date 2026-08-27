@@ -333,6 +333,72 @@ class EstadoNaBarraTest(unittest.TestCase):
         with patch.object(main.actions, "play_sound"):
             app._on_dictation_send()
         self.assertEqual(app._current_state, "sent")
+        app._revert_timer.cancel()
+
+    def test_o_azul_de_enviado_volta_sozinho_pra_escutando(self):
+        # "Mandou" é um EVENTO, não uma situação: a escuta continua
+        # logo depois. Sem o flash o azul ficava até acontecer outra
+        # coisa (podiam ser minutos), e nesse tempo todo o ícone
+        # respondia ERRADO a única pergunta que ele existe pra
+        # responder — "ele está me ouvindo agora?".
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._flash_state("sent", seconds=0)
+        app._revert_timer.join(2)
+        self.assertEqual(app._current_state, "listening")
+
+    def test_flash_nao_desfaz_um_estado_que_alguem_ja_mudou(self):
+        # Entre o flash e o timer dá tempo de a pessoa apertar "Stop
+        # listening", começar outro ditado, ou dar erro. Quem mudou
+        # depois tem mais razão que um timer velho.
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._flash_state("sent", seconds=0.4)
+        app._set_state("error")
+        app._revert_timer.join(2)
+        self.assertEqual(app._current_state, "error")
+
+    def test_flash_durante_um_ditado_novo_volta_pra_ditando(self):
+        # Falar de novo antes do timer terminar é normal (a resposta
+        # vem rápido). O ícone tem que voltar pro estado REAL, não pro
+        # que era quando o flash começou.
+        app = _build_app(load_model=True)
+        app.listening = True
+        app.session.dictating = True
+        app._flash_state("sent", seconds=0)
+        app._revert_timer.join(2)
+        self.assertEqual(app._current_state, "dictating")
+
+    def test_flash_com_a_escuta_parada_volta_pro_parado(self):
+        app = _build_app(load_model=True)
+        app.listening = False
+        app._flash_state("sent", seconds=0)
+        app._revert_timer.join(2)
+        self.assertEqual(app._current_state, "stopped")
+
+    def test_cancelar_ditado_nao_pinta_de_enviado(self):
+        # Cancelar e mandar são opostos; se pintassem igual, o ícone
+        # diria que o texto foi embora quando ele foi justamente
+        # jogado fora.
+        app = _build_app(load_model=True)
+        app.listening = True
+        with patch.object(main.actions, "play_sound"):
+            app._on_dictation_cancel()
+        self.assertEqual(app._current_state, "listening")
+
+    def test_cancelar_toca_o_som_de_cancelar_nao_o_de_mandar(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        with patch.object(main.actions, "play_sound") as tocou:
+            app._on_dictation_cancel()
+        tocou.assert_called_once_with(main.config.DICTATION_CANCEL_SOUND)
+
+    def test_a_sessao_recebe_o_callback_de_cancelamento(self):
+        # Sem isso o cancelamento funcionaria na lógica e ficaria MUDO
+        # na interface — que é o mesmo que não existir, já que o ponto
+        # é saber que o texto não foi mandado.
+        app = _build_app()
+        self.assertEqual(app.session.on_cancel, app._on_dictation_cancel)
 
     def test_parar_escuta_volta_pro_parado(self):
         app = _build_app(load_model=True)
@@ -363,10 +429,13 @@ class EstadoNaBarraTest(unittest.TestCase):
 
 class IconesDeStatusTest(unittest.TestCase):
     """
-    STATUS_ICONS são círculos coloridos de VERDADE (PNG), nas cores
-    exatas de design/layouts_mockup.html — não mais emoji, cujas cores
-    são as do fonte da Apple, não as documentadas. Ver
-    design/generate_status_icons.py.
+    STATUS_ICONS são PNGs de VERDADE: a silhueta do mascote do
+    briefing (design/menubar_icon_template.svg) nas cores exatas de
+    design/layouts_mockup.html — não mais emoji (cujas cores são as do
+    fonte da Apple) nem círculo liso (que perdia a identidade). A
+    fidelidade do desenho e da cor é conferida em
+    test_status_icons.py, contra os bytes do PNG; aqui só o que
+    main.py precisa: as 6 chaves e os arquivos existindo.
     """
 
     def test_todo_estado_tem_icone_e_o_arquivo_existe(self):

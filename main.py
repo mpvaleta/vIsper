@@ -218,6 +218,10 @@ class VisperApp(rumps.App):
         # a segunda é a mais provável (a wake word padrão é uma palavra
         # inventada — ver "Limite atual do reconhecimento" no README).
         self._last_heard = ""
+        # Timer que desfaz um estado momentâneo (hoje só o "mandou") —
+        # ver _flash_state(). Um por vez; começar outro cancela o
+        # anterior.
+        self._revert_timer = None
 
         self.mic_menu = rumps.MenuItem("Microphone")
         # Ver o guard em _rebuild_mic_menu(): o rumps só cria o NSMenu
@@ -300,6 +304,46 @@ class VisperApp(rumps.App):
         icon_path = STATUS_ICONS.get(state, STATUS_ICONS["stopped"])
         AppHelper.callAfter(setattr, self, "icon", icon_path)
 
+    def _flash_state(self, state, seconds=2.5):
+        """Mostra um estado por alguns segundos e volta pro que a
+        situação REAL manda.
+
+        Existe porque "mandou" (azul) é um EVENTO, não uma situação: o
+        app continua escutando logo depois. Sem isso o azul ficava até
+        a próxima coisa acontecer — podiam ser minutos —, e o ícone
+        passava esse tempo todo respondendo errado a pergunta que ele
+        existe pra responder ("ele está me ouvindo agora?").
+
+        `_current_state` é relido na hora de voltar, não capturado
+        agora: entre o flash e o timer a pessoa pode ter apertado
+        "Stop listening", começado outro ditado, ou dado erro — e
+        nenhum desses pode ser desfeito por um timer velho.
+        """
+        self._set_state(state)
+        if self._revert_timer is not None:
+            self._revert_timer.cancel()
+
+        def voltar():
+            # A referência do timer NÃO é limpa aqui de propósito:
+            # cancel() num Timer que já disparou é inofensivo, e
+            # deixar a referência viva é o que permite esperar por ele
+            # (nos testes) sem corrida.
+            #
+            # Só desfaz o PRÓPRIO flash: se o estado já mudou, quem
+            # mudou tem mais razão que este timer.
+            if self._current_state != state:
+                return
+            if self.session.dictating:
+                self._set_state("dictating")
+            else:
+                self._set_state("listening" if self.listening else "stopped")
+
+        self._revert_timer = threading.Timer(seconds, voltar)
+        # Daemon: um timer pendente não pode segurar o processo aberto
+        # depois de "Quit vIsper".
+        self._revert_timer.daemon = True
+        self._revert_timer.start()
+
     def _set_heard(self, texto):
         """Mostra no menu o que o Whisper entendeu por último. Mesmo
         motivo de _set_state() pra despachar via callAfter — chamado
@@ -315,7 +359,9 @@ class VisperApp(rumps.App):
         self._play_dictation_sound(config.DICTATION_OPEN_SOUND)
 
     def _on_dictation_send(self):
-        self._set_state("sent")
+        # Flash, não estado fixo: mandar é um evento e a escuta segue —
+        # ver _flash_state().
+        self._flash_state("sent")
         self._play_dictation_sound(config.DICTATION_SEND_SOUND)
 
     def _on_dictation_cancel(self):

@@ -93,7 +93,7 @@ estado** — a forma nunca muda (é como você acha ele entre os outros
 | Cinza | Pronto, mas **não** está escutando — clique em Start listening |
 | Verde | Escutando, esperando a palavra de ativação |
 | Coral | Te ouviu, está acumulando o ditado |
-| Azul | Acabou de colar e mandar |
+| Azul | Acabou de colar e mandar (volta pro verde em ~2s) |
 | Terracota | Algo falhou — abra o menu, a explicação está lá |
 
 Dentro do menu tem também **Heard:** — a última coisa que ele entendeu,
@@ -420,7 +420,7 @@ Honestidade sobre o que foi validado de verdade:
 
 | Peça | Como foi validada |
 |---|---|
-| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 291 testes automatizados |
+| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 298 testes automatizados |
 | App de iPhone (`docs/`) | 39 testes num navegador de verdade (Chromium), a cada push |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |
