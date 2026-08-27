@@ -880,10 +880,25 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
    (ver README) — confirmar que aparece e que o áudio do sistema
    realmente degrada como esperado, já que isso nunca foi ouvido de
    verdade, só deduzido de como o Bluetooth clássico funciona. Testar
-   também: os earcons tocando nos momentos certos (abrir/mandar, não
-   ao cancelar), e a persistência de escolha manual sobrevivendo a um
-   `python3 main.py` novo (escolher o Sony, fechar o app, abrir de
-   novo, conferir que já veio marcado sem precisar escolher de novo).
+   também: os earcons tocando nos momentos certos (abrir/mandar/
+   cancelar — os três sons são diferentes de propósito), e a
+   persistência de escolha manual sobrevivendo a um `python3 main.py`
+   novo (escolher o Sony, fechar o app, abrir de novo, conferir que já
+   veio marcado sem precisar escolher de novo). O que mudou desde o
+   último teste dela e precisa de olhar específico:
+   - **falar português E inglês** na mesma sessão, conferindo o
+     `[pt]`/`[en]` no "Heard:" — e se aparecer `[en→pt]`, isso é a
+     correção funcionando, não um erro;
+   - **os ícones**: são a silhueta do mascote agora, e o azul de
+     "mandou" tem que voltar pro verde sozinho em ~2s;
+   - **"vIsper, cancela"**: descarta o ditado, som DIFERENTE do de
+     mandar, e nada é colado;
+   - **os ajustes pelo menu** ("Wake word…", "Spoken languages…") —
+     conferir principalmente que trocar o idioma vale na hora, sem
+     reabrir o app;
+   - **no iPhone**: ditar pela tecla de microfone do TECLADO (não pelo
+     botão do app) e não encostar em mais nada — tem que mandar
+     sozinho depois de uns segundos.
 2. Depois do item 1 validado manualmente por uns dias: configurar o
    LaunchAgent (`launchd/com.valeta.visper.plist`, ver README) —
    confirmar que o ícone aparece sozinho no login, que "Sair" não
@@ -911,11 +926,13 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
 
 A Valeta decide o que vale a pena construir — isso é só uma lista de
 ideias que surgiram, não um compromisso:
-- Feedback VISUAL (o mascote mudando de estado na barra de menu) —
-  o sonoro já existe (earcon em `config.DICTATION_*_SOUND`, ver
-  abaixo), mas continua sem nada visual além do texto do submenu.
-- Envio automático depois de alguns segundos de silêncio, como rede
-  de segurança pra quando esquecer de repetir a wake word.
+- Envio automático depois de alguns segundos de silêncio NO MAC,
+  como rede de segurança pra quando esquecer de repetir a wake word.
+  **Já existe no iPhone** (o PWA arma `IDLE_MS` a cada digitação e
+  cai na mesma janela de cancelamento), mas no Mac é bem mais
+  arriscado: lá o microfone fica aberto o tempo todo, então "parou de
+  falar" acontece o tempo todo sem querer dizer "terminei". Precisaria
+  ser opt-in e provavelmente com janela de cancelamento maior.
 - Comando que manda direto o que já está copiado (pula o ditado).
 - Apple Watch: o mesmo App Intent do iPhone, disparável pelo relógio
   — combina com o caso de uso do treino.
