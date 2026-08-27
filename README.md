@@ -1,329 +1,378 @@
 # vIsper
 
-Interface completa ativada por voz: fala a wake word + o nome de uma
-IA, ele abre o chat certo (Claude, Claude Code, Perplexity, ChatGPT,
-Gemini). Se falar só a wake word, abre a IA padrão. Depois disso, tudo
-que você falar é acumulado como sua mensagem — quando terminar, fale
-a wake word de novo (com qualquer palavra junto) que ele cola tudo no
-chat e aperta Enter. Nenhum outro app de ditado é necessário. Dois
-tipos de entrada são reconhecidos automaticamente — o receiver do DJI
-Mic, ou um fone Bluetooth tipo o Sony WH-1000XM5/WF-1000XM5 — mas
-funciona com qualquer microfone que o Mac reconheça, escolhido
-manualmente no menu se preferir.
+Fala a palavra de ativação + o nome de uma IA, e ele abre o chat certo
+(Claude, Claude Code, Perplexity, ChatGPT, Gemini). Depois disso, tudo
+que você falar vira sua mensagem — quando terminar, fale "câmbio" (ou
+"over", ou a palavra de ativação de novo) que ele cola tudo no chat e
+aperta Enter. Nenhum outro app de ditado é necessário.
 
-## Sobre o DJI Mic
+Tudo numa respiração só também funciona, e é o jeito mais natural de
+usar:
 
-Não precisa abrir o app da DJI pra isso funcionar. Basta plugar o
-receiver via USB-C (ou pelo adaptador) no Mac — o macOS já detecta
-ele automaticamente como dispositivo de entrada, normalmente com um
-nome contendo "DJI" ou "Wireless Microphone RX". O app da DJI
-(Mimo / DJI Mic) só entra em cena se você quiser ajustar o ganho do
-mic ou monitorar o áudio na hora — não é necessário pra esse programa
-capturar o som.
+> "vIsper claude qual é a previsão do tempo **over**"
 
-## Sobre usar fone de ouvido (Bluetooth)
+## O caminho curto (se você só quer usar)
 
-Fones pareados por Bluetooth — testado pensando no Sony WH-1000XM5 e
-WF-1000XM5 — também são reconhecidos automaticamente, do mesmo jeito
-que o DJI Mic: o macOS já lista o fone conectado como dispositivo de
-entrada normal, sem instalar nada. Se os dois estiverem disponíveis
-ao mesmo tempo, o DJI Mic ganha por padrão (ver `PREFERRED_INPUT_DEVICES`
-em `config.py`) — é um mic dedicado, sem o efeito colateral abaixo.
+1. **Mac:** baixe o DMG (aba Actions → última execução ✅ → Artifacts),
+   arraste pra Applications, **botão direito → Abrir** na primeira vez.
+2. Espere o ⏳ da barra de menu virar 🎙 (primeira vez baixa o modelo,
+   ~150 MB), clique → **Start listening**, e autorize Microfone e
+   Acessibilidade quando o macOS pedir.
+3. Fale: **"vIsper claude oi over"**. Pronto — o resto deste README é
+   detalhe.
 
-**Aviso importante de qualidade — isso é do protocolo Bluetooth, não
-um bug do vIsper:** usar o microfone de um fone Bluetooth clássico
-(AirPods, Sony XM5, qualquer um) força o Mac a trocar o perfil dele
-de A2DP (estéreo, alta qualidade, só toca áudio) pra HFP/HSP — o
-mesmo perfil usado em ligação telefônica. Isso derruba a qualidade do
-**áudio do sistema inteiro** (não só da gravação) pra mono, enquanto
-o stream de entrada estiver aberto — ou seja, se você estiver ouvindo
-música ou podcast no fone e clicar em "Iniciar escuta", o som vai
-piorar perceptivelmente até você clicar em "Parar escuta" (ou fechar
-o app). O vIsper mostra uma notificação avisando isso na primeira vez
-que detecta um fone Bluetooth em cada sessão de escuta.
+E ele tolera erro de pronúncia/transcrição: "whisper claude",
+"vIsper cloud" e parecidos funcionam igual (ver "Se ele não te
+reconhece", abaixo).
 
-Se o seu modelo não for reconhecido automaticamente (nome diferente
-do esperado, ou outro fone que não o Sony XM5), duas opções: escolha
-manualmente no menu "Escolher microfone", ou adicione as palavras-chave
-do nome dele em `PREFERRED_INPUT_DEVICES` (`config.py`) — rode
-`python3 doctor.py` pra ver o nome exato que o seu macOS usa antes de
-escrever o keyword.
+---
 
-## Instalação
+## Instalar no Mac
+
+### O jeito fácil — baixar o app pronto
+
+O `.dmg` é compilado num Mac de verdade pelo GitHub a cada mudança no
+código. Pra baixar:
+
+1. Vá na aba **[Actions](https://github.com/mpvaleta/vIsper/actions/workflows/build-macos.yml)**
+   → clique na execução mais recente com ✅ → role até **Artifacts** no
+   fim da página, e baixe **`vIsper-AppleSilicon`** (Macs com chip M1,
+   M2, M3 ou M4 — confira em menu  → **Sobre este Mac** se aparecer
+   "Chip: Apple M...").
+
+   Vem num `.zip` (o GitHub sempre compacta artefato); descompacte e o
+   `.dmg` está lá dentro. Precisa estar logada no GitHub pra baixar.
+
+   *Mac Intel (pré-2020)?* O GitHub aposentou os runners Intel, então
+   não há DMG pronto pra essa arquitetura — use o caminho de
+   desenvolvedor logo abaixo (funciona igual), ou rode
+   `./build_mac_app.sh` na própria máquina pra gerar o seu.
+
+   > Quer a página de **Releases**, com link direto e sem login? É um
+   > comando, na pasta do vIsper:
+   > ```bash
+   > git tag v0.1.0 && git push origin v0.1.0
+   > ```
+   > Isso dispara o mesmo build e anexa os dois DMGs numa Release de
+   > verdade. (Eu não consigo fazer isso daqui — o ambiente onde este
+   > código foi escrito só tem permissão de push pro branch, não pra
+   > tags: `403` ao tentar.)
+
+2. Abra o `.dmg` e arraste o vIsper pra pasta Applications.
+
+3. **Na primeira vez, abra com botão direito → Abrir.** O duplo clique
+   normal é bloqueado porque o app não é assinado por uma conta paga da
+   Apple (US$ 99/ano, contra o custo zero deste projeto). Só na
+   primeira vez; depois o duplo clique funciona.
+
+4. Aparece um **⏳** na barra de menu. Na primeiríssima execução ele
+   baixa o modelo de transcrição (~150 MB), então precisa de internet e
+   pode demorar alguns minutos. Quando virar **🎙**, está pronto.
+
+5. Clique no ícone → **Start listening**. O macOS vai pedir permissão
+   de **Microfone**; autorize.
+
+6. Fale um comando. Na primeira vez que ele tentar colar, o macOS pede
+   permissão de **Acessibilidade** — o próprio app te manda pro lugar
+   certo (Ajustes do Sistema → Privacidade e Segurança →
+   Acessibilidade). Ligue o vIsper lá e clique em Start listening de
+   novo.
+
+Pronto.
+
+### O que o ícone está te dizendo
+
+O ícone da barra de menu é o estado do app, e usa as mesmas cores do
+resto do design:
+
+| Ícone | Quer dizer |
+|---|---|
+| ⏳ | Carregando o modelo de transcrição (só na primeira vez demora) |
+| 🎙 | Pronto, mas **não** está escutando — clique em Start listening |
+| 🟢 | Escutando, esperando a palavra de ativação |
+| 🔴 | Te ouviu, está acumulando o ditado |
+| 🔵 | Acabou de colar e mandar |
+| 🟠 | Algo falhou — abra o menu, a explicação está lá |
+
+Dentro do menu tem também **Heard:** — a última coisa que ele entendeu.
+Esse é o primeiro lugar pra olhar quando parecer que ele te ignorou:
+quase sempre ele ouviu, mas transcreveu a palavra de ativação de outro
+jeito (ver "Se ele não te reconhece", abaixo).
+
+### O jeito de desenvolvedor — rodar do código
+
+Precisa de **Python 3.10, 3.11 ou 3.12** (o 3.13 ainda não tem as
+bibliotecas de que isso depende; o 3.9 que já vem no macOS roda o app
+mas não empacota o `.app`).
 
 ```bash
-# dependência do sistema pro sounddevice conseguir acessar áudio
-brew install portaudio
+brew install portaudio python@3.11
 
-# venv dedicado, dentro da própria pasta do vIsper — recomendado (não
-# só "boa prática" genérica): se você for configurar o LaunchAgent
-# depois (ver "Deixar rodando sozinho", abaixo), ele precisa de um
-# caminho de interpreter Python FIXO e não deve depender de qual
-# python3 o PATH do seu shell resolve num dado momento. Use o mesmo
-# venv pra tudo (aqui embaixo E no LaunchAgent) — assim as permissões
-# do macOS (mic/Automação/Acessibilidade), que são concedidas por
-# BINÁRIO específico, só precisam ser concedidas uma vez.
-python3 -m venv venv
-source venv/bin/activate   # repita isso em cada Terminal novo antes de rodar algo daqui
-
-# dependências Python
+cd vIsper
+python3.11 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+
+python3 setup_visper.py   # configura (opcional, mas recomendado)
+python3 doctor.py         # confere se está tudo certo
+python3 main.py           # abre o ícone na barra de menu
 ```
 
-Na primeira execução, o macOS vai pedir permissão de microfone pro
-Terminal (ou pro app, se você empacotar depois) — autorize em
-Ajustes do Sistema → Privacidade e Segurança → Microfone.
+Pra gerar o `.app`/`.dmg` você mesmo: `./build_mac_app.sh`
+(ou `./build_mac_app.sh --dev` pra um build de segundos, que só
+funciona enquanto a pasta não sair do lugar).
 
-Como o comando "abre Claude Code" usa AppleScript pra controlar o
-Terminal, o macOS também vai pedir permissão de Automação na primeira
-vez — autorize também.
+---
 
-## Rodando
+## Instalar no iPhone
 
-Antes de rodar de verdade, vale conferir a config:
+**Não existe DMG de iPhone** — iOS só instala app pela App Store ou
+compilado no Xcode, e com conta grátis o app expira em 7 dias. O
+caminho abaixo não custa nada, não expira, e leva 1 minuto.
+
+1. No **Mac**, rode `python3 setup_visper.py`. Ele imprime (e copia) um
+   link.
+2. Mande esse link pro iPhone — AirDrop, Notas, ou uma mensagem pra
+   você mesma.
+3. Abra o link **no Safari do iPhone**.
+4. Toque em **Compartilhar** → **Adicionar à Tela de Início**.
+
+Vira um ícone que abre como app. Toque no microfone, fale, e ele manda
+pro Mac — de qualquer lugar com internet, não só na Wi-Fi de casa.
+
+> **Faça o passo 4 antes de fechar o Safari.** No iOS, o app da tela de
+> início tem armazenamento separado do Safari; o que leva sua conexão
+> pra lá é o link. Se fechar antes, é só abrir o link de novo.
+
+Instalado pelo `.dmg` e sem Terminal à mão? Dá pra configurar o mesmo
+tópico pelo menu do app: **Settings…**
+
+Prefere a Siri e o Apple Watch em vez de um ícone? Tem uma receita pro
+app Atalhos em [`ios/ATALHO_IPHONE.md`](ios/ATALHO_IPHONE.md) — funciona
+junto, os dois usam o mesmo tópico.
+
+### Segurança — leia esta parte
+
+O iPhone fala com o Mac por um tópico do
+[ntfy](https://ntfy.sh), que é gratuito e não pede senha. Isso quer
+dizer que **o nome do tópico É a senha**: quem souber ele consegue
+disparar automação de verdade no seu Mac.
+
+Por isso:
+
+- O `setup_visper.py` sorteia um nome longo e aleatório. Não troque por
+  algo "fácil de lembrar".
+- Ele fica em `~/Library/Application Support/vIsper/settings.json`,
+  **fora do repositório** — este repositório é público, e um `git push`
+  distraído publicaria a chave da sua casa.
+- Desconfiou que vazou? Rode o `setup_visper.py` de novo: sorteia
+  outro, e o antigo deixa de valer na hora.
+- Por padrão o iPhone **não** pode abrir o Claude Code, porque isso
+  abriria o Terminal e digitaria dentro dele — vazar o tópico deixaria
+  de ser "digitar num chat" e viraria execução de comando. Pelo
+  microfone local continua funcionando normalmente. Pra mudar, ver
+  `RELAY_BLOCKED_AIS` em `config.py`.
+- O texto passa em claro pelo servidor público do ntfy.sh. Não mande
+  senha, dado bancário nem nada sigiloso por ali.
+
+---
+
+## Se ele não te reconhece
+
+Isso agora tem **duas camadas de defesa automáticas**, porque a palavra
+"vIsper" é inventada e o transcritor erra a grafia dela com frequência:
+
+1. **O transcritor é avisado do vocabulário.** A wake word, os nomes
+   das IAs e "câmbio"/"over" entram como prioridade na transcrição
+   (parâmetro `hotwords` do faster-whisper) — o erro acontece menos.
+2. **Quando ainda erra, o casamento tolera.** "whisper", "vesper",
+   "vísper" contam como "vIsper"; "cloud" e "clode" contam como
+   "claude". Os limiares foram medidos contra transcrições reais — e
+   contra as palavras de ditado mais parecidas, pra não colar em coisa
+   errada ("dispersar" não dispara nada).
+
+A tolerância vale **só pra abrir**. Pra fechar/mandar ("câmbio",
+"over", ou a wake word de novo) o casamento é exato de propósito:
+mandar a mensagem pela metade por um falso positivo é bem pior do que
+abrir uma aba à toa. Ajuste fino em `FUZZY_MATCH_THRESHOLD`
+(`config.py`) — 1.0 desliga a tolerância.
+
+Se mesmo assim parecer surdo: abra o menu e veja o **Heard:**, que
+mostra o que ele realmente entendeu — é a diferença entre "não me
+ouviu" e "ouviu mas escreveu diferente". Trocar a palavra de ativação
+por uma REAL ("Vésper", "Íris") ajuda mais ainda:
 
 ```bash
-python3 doctor.py
+python3 setup_visper.py    # ele pergunta a palavra de ativação
 ```
 
-Isso confere dependências instaladas, se algum microfone preferido
-(DJI Mic ou fone Bluetooth) está detectável agora, se o tópico do
-ntfy não é um valor óbvio/curto, se a config do Porcupine (se usada)
-está completa, e se `DEFAULT_AI` bate com algo em `AI_TRIGGERS` — sem
-precisar de permissão de mic nem de nada rodando pra isso (só
-enumera os dispositivos, não abre stream).
+A solução definitiva continua sendo o Porcupine (mais abaixo), que
+reconhece o SOM da palavra em vez de tentar escrever ela.
 
-```bash
-python3 main.py
-```
+---
 
-Um ícone aparece na barra de menu. Clique nele para:
-- **Escolher microfone** — submenu com todo dispositivo de entrada
-  disponível no momento; clique num nome pra usar ele manualmente, ou
-  em "Detectar automaticamente" pra voltar a deixar o vIsper escolher
-  sozinho (DJI Mic > fone Bluetooth, ver `PREFERRED_INPUT_DEVICES` em
-  `config.py`). Útil se o dispositivo certo não for detectado
-  sozinho, ou se você quiser forçar um em especial. A escolha manual
-  fica salva (`~/Library/Application Support/vIsper/device.json`) e
-  volta sozinha da próxima vez que você abrir o vIsper — clicar em
-  "Detectar automaticamente" esquece essa escolha salva também.
-- **Iniciar escuta** — começa a ouvir e reagir aos comandos. Se nada
-  tiver sido escolhido manualmente, tenta detectar de novo nesse
-  instante (então ligar o fone Bluetooth DEPOIS de abrir o vIsper
-  ainda funciona, sem precisar reiniciar o app)
-- **Parar escuta** — pausa
+## Microfone
 
-## Deixar rodando sozinho, sem precisar abrir Terminal (LaunchAgent)
+O vIsper reconhece automaticamente, nesta ordem: **DJI Mic** (é só
+plugar o receiver por USB-C — não precisa do app da DJI), depois **fone
+Bluetooth** (Sony WH-1000XM5/WF-1000XM5). Se nenhum dos dois estiver
+por perto, usa o **microfone padrão do Mac**, então ele funciona de
+cara mesmo sem equipamento nenhum.
 
-Depois que `python3 main.py` estiver funcionando bem manualmente
-(ver acima) por uns dias, dá pra deixar o macOS iniciar o vIsper
-sozinho no login, em segundo plano, sem precisar abrir Terminal toda
-vez. Use um **LaunchAgent** — o jeito padrão do macOS pra isso
-(reinicia sozinho se crashar, não depende da UI de Login Items
-mudando entre versões do macOS).
+Pra forçar um específico: menu → **Microphone**. A escolha fica salva e
+volta sozinha da próxima vez.
 
-**NUNCA TESTADO NUM MAC DE VERDADE** — mesma honestidade do resto
-deste projeto: escrito contra a documentação real do formato
-`launchd.plist` (não de memória vaga), e o XML foi validado com
-`plistlib` (parser estrito, garante que está bem formado), mas
-nenhum `launchctl` de verdade rodou isso ainda.
+### Aviso sobre fone Bluetooth
 
-1. Confirme que já tem um venv em `venv/` dentro da pasta do vIsper
-   (ver "Instalação", acima) com tudo instalado — o LaunchAgent
-   aponta pra esse interpreter específico, não pro `python3` do
-   sistema.
+Usar o microfone de um fone Bluetooth clássico (AirPods, Sony XM5,
+qualquer um) força o Mac a trocar o perfil dele de A2DP pra HFP/HSP — o
+mesmo de ligação telefônica. Isso derruba a qualidade do **áudio do
+sistema inteiro** pra mono enquanto a escuta estiver ativa. Se você
+estiver ouvindo música e clicar em Start listening, o som vai piorar
+até você clicar em Stop listening.
 
-2. Copie o template e troque as 4 ocorrências de
-   `TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER` pelo caminho absoluto de
-   verdade da pasta (ex.: `/Users/valeta/vIsper` — descubra o seu
-   com `pwd` dentro da pasta):
-   ```bash
-   cp launchd/com.valeta.visper.plist ~/Library/LaunchAgents/
-   # depois edite ~/Library/LaunchAgents/com.valeta.visper.plist e troque o placeholder
-   ```
+**Isso é do protocolo Bluetooth, não um bug do vIsper** — nenhum app
+consegue evitar. O vIsper avisa por notificação quando detecta um fone.
 
-3. Carregue o LaunchAgent:
-   ```bash
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.valeta.visper.plist
-   ```
-   (Se o Mac estiver numa versão mais antiga do macOS e isso der erro,
-   tente o comando clássico equivalente:
-   `launchctl load ~/Library/LaunchAgents/com.valeta.visper.plist`.)
+Outro fone que não é reconhecido sozinho? Escolha no menu, ou
+acrescente as palavras-chave do nome dele em `PREFERRED_INPUT_DEVICES`
+(`config.py`). Rode `python3 doctor.py` pra ver o nome exato que o seu
+macOS usa.
 
-4. Confirme que carregou e que o ícone apareceu na barra de menu:
-   ```bash
-   launchctl list | grep com.valeta.visper
-   ```
-   Se o ícone não aparecer, olhe os logs (sem Terminal aberto, é pra
-   onde print()/erro vão agora):
-   ```bash
-   cat ~/vIsper/visper.out.log   # troque pelo caminho real
-   cat ~/vIsper/visper.err.log
-   ```
+---
 
-5. Pra desligar o início automático (voltar a rodar só manualmente):
-   ```bash
-   launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.valeta.visper.plist
-   rm ~/Library/LaunchAgents/com.valeta.visper.plist
-   ```
+## Ajustar o comportamento
 
-Detalhe importante do comportamento: o LaunchAgent só reinicia o
-vIsper sozinho se ele **crashar** (saída com erro) — clicar em "Sair"
-no menu é uma saída deliberada seu e não reabre sozinho, de propósito
-(`KeepAlive`/`SuccessfulExit` no plist).
+O que muda o dia a dia se configura pelo `python3 setup_visper.py` ou
+pelo menu **Settings…** do app. Os padrões (e as opções mais raras)
+estão no `config.py`:
 
-## Como customizar (`config.py`)
+- `WAKE_WORD` — a palavra de ativação
+- `DEFAULT_AI` — qual IA abre se você falar só a palavra de ativação
+- `AI_TRIGGERS` — apelidos de cada IA, em quantos idiomas quiser
+- `CLOSE_TRIGGERS` — o que manda ver sem repetir a palavra de ativação.
+  Padrão: `"câmbio"` e `"over"`, emprestados do vocabulário de rádio
+  ("terminei de falar, sua vez"). Escolhidos por serem raros o
+  bastante em fala natural pra não disparar sem querer no meio do seu
+  ditado — ao contrário de "manda"/"pronto"/"send", que são comuns
+  demais. Casam como palavra inteira, então "over" não confunde com
+  "however" nem "discover".
+- `PREFERRED_INPUT_DEVICES` — quais microfones são reconhecidos
+  sozinhos, em ordem de prioridade
+- `FUZZY_MATCH_THRESHOLD` — quão tolerante a abertura é com erro de
+  transcrição (0.72 padrão, medido; 1.0 = só casamento exato)
+- `RELAY_BLOCKED_AIS` — o que o iPhone não pode abrir (ver Segurança)
+- `DICTATION_OPEN_SOUND` / `DICTATION_SEND_SOUND` — o som curto de
+  abrir/mandar. Usa sons que já vêm no macOS (Pop, Glass, Tink, Ping…).
+  Útil de fone: dá pra saber que abriu/mandou sem olhar pra tela.
+  `DICTATION_SOUNDS_ENABLED = False` desliga.
 
-Tudo que você provavelmente vai querer mexer está em `config.py`, não
-espalhado pelo resto do código:
+**Não coloque nada pessoal no `config.py`** — ele é versionado num
+repositório público. Tópico do ntfy e chave do Porcupine se configuram
+pelo `setup_visper.py`, que guarda tudo fora do repositório.
 
-- `WAKE_WORD` — a palavra/frase de ativação. Troque à vontade.
-- `DEFAULT_AI` — qual IA abre se você disser só a wake word.
-- `AI_TRIGGERS` — apelidos de cada IA, em quantos idiomas quiser.
-- `PREFERRED_INPUT_DEVICES` — quais microfones/fones são reconhecidos
-  automaticamente, em ordem de prioridade (hoje: DJI Mic, depois Sony
-  WH-1000XM5/WF-1000XM5). Cada grupo é `{"keywords": [...],
-  "bluetooth": bool}` — adicione um grupo novo pra reconhecer outro
-  fone/mic seu, ou reordene se quiser que outro dispositivo ganhe do
-  DJI quando os dois estiverem disponíveis. A flag `"bluetooth"`
-  controla só se o aviso de qualidade (ver "Sobre usar fone de
-  ouvido", acima) aparece ou não.
-- `DICTATION_SOUNDS_ENABLED` / `DICTATION_OPEN_SOUND` / `DICTATION_SEND_SOUND`
-  — earcon (som curto) quando o ditado abre e quando manda ver. Usa
-  sons já embutidos no macOS (`/System/Library/Sounds/*.aiff` — Pop,
-  Glass, Tink, Ping, etc., troque o nome à vontade), sem precisar de
-  nenhum arquivo extra. Especialmente útil usando fone de ouvido: dá
-  pra saber que abriu/mandou sem olhar pra barra de menu — ex. durante
-  o treino. `DICTATION_SOUNDS_ENABLED = False` desliga completamente.
-- `CLOSE_TRIGGERS` — palavras que, durante o ditado, mandam ver sem
-  precisar repetir a wake word. Padrão: `"câmbio"` (PT) e `"over"`
-  (EN) — vocabulário emprestado de comunicação por rádio ("terminei
-  de falar, sua vez"), escolhido de propósito por serem raros o
-  bastante em fala natural pra não disparar sem querer no meio do que
-  você está ditando (ao contrário de palavras comuns tipo
-  "manda"/"send" ou "pronto"/"done"). Casam como palavra inteira
-  (`text_utils.py`), então "over" não confunde com "however" nem
-  "discover" no meio de uma frase em inglês.
-
-Uma sessão completa com a wake word padrão ("vIsper"):
+### Uma sessão completa
 
 | Você fala | O que acontece |
 |---|---|
-| "vIsper, abre o ChatGPT" | Abre chat.openai.com, entra em modo ditado |
-| "preciso de um resumo do relatório de vendas" | Vira parte da sua mensagem (não faz nada visível ainda) |
+| "vIsper, abre o ChatGPT" | Abre o ChatGPT, entra em modo ditado (🔴) |
+| "preciso de um resumo do relatório de vendas" | Vira parte da sua mensagem |
 | "do segundo trimestre, por favor" | Continua acumulando |
-| "câmbio" (ou "over", ou "vIsper" de novo) | Cola a mensagem inteira no chat e aperta Enter |
+| "câmbio" | Cola tudo no chat e aperta Enter (🔵) |
 
-Se, em vez de um nome de IA, você disser só a wake word sozinha, abre
-a IA definida em `DEFAULT_AI` e já entra em modo ditado do mesmo
-jeito. "vIsper, abre Claude Code" continua abrindo o Terminal e
-rodando `claude`, sem modo ditado (isso é específico do fluxo web).
+Dois avisos que importam:
 
-**Importante — três avisos:**
-1. Toda ação só é reconhecida se vier depois da wake word na mesma
-   frase, pra evitar disparo à toa por palavra comum do dia a dia.
-2. Durante o ditado, se a wake word OU um dos `CLOSE_TRIGGERS`
-   aparecer sem querer no meio do que você está falando (por erro de
-   transcrição ou ruído, ou porque a frase genuinamente continha
-   aquela palavra), a sessão corta ali e manda cedo demais. Escolher
-   palavras raras pro `CLOSE_TRIGGERS` reduz isso bastante, mas não
-   zera — o motor de wake-word de verdade (Porcupine, abaixo) resolve
-   melhor ainda, porque detecta o SOM da wake word, não texto
-   transcrito. Isso hoje só vale pra wake word em si — os
-   `CLOSE_TRIGGERS` novos ainda não têm detecção acústica própria
-   (cada palavra que o Porcupine reconhece precisa do próprio treino
-   em console.picovoice.ai).
-3. Colar o texto e apertar Enter usa o **System Events**, que precisa
-   de permissão de **Acessibilidade** (não só Automação) pro
-   Terminal/Python, em Ajustes do Sistema → Privacidade e Segurança
-   → Acessibilidade.
+1. Só é reconhecido o que vier **depois** da palavra de ativação, pra
+   evitar disparo à toa.
+2. Durante o ditado, se a palavra de ativação ou um `CLOSE_TRIGGERS`
+   aparecer sem querer no meio do que você está falando, a sessão corta
+   ali e manda cedo demais. Palavras raras reduzem muito isso, mas não
+   zeram — o Porcupine resolve melhor.
 
-## Usar do iPhone, de qualquer lugar (`relay_listener.py` + ntfy)
+---
 
-Pra disparar comando do iPhone mesmo fora da Wi-Fi de casa (ex.:
-durante o treino), o Mac escuta um tópico privado no
-[ntfy](https://ntfy.sh) — um serviço gratuito e open-source de
-pub/sub por HTTP — e o iPhone publica o comando nesse mesmo tópico
-de onde estiver.
+## Deixar rodando sozinho no login
 
-Configurar o lado do Mac:
+Instalado pelo `.dmg`, é só: **Ajustes do Sistema → Geral → Itens de
+Início → +** e escolher o vIsper. É o jeito mais simples e não precisa
+de mais nada.
 
-1. Gerar um nome de tópico longo e aleatório (**nunca** um nome óbvio
-   — tópicos do ntfy.sh são públicos por padrão, e isso aciona
-   automação de verdade no seu Mac):
-   ```bash
-   python3 -c "import secrets; print('visper-' + secrets.token_urlsafe(24))"
-   ```
-2. Colar o resultado em `NTFY_TOPIC` no `config.py`.
-3. Rodar `main.py` normalmente — se `NTFY_TOPIC` não estiver vazio,
-   o relay liga sozinho numa thread separada, sem precisar de nada
-   no menu.
+Rodando pelo código (`python3 main.py`), tem um LaunchAgent em
+`launchd/com.valeta.visper.plist`:
 
-Testar manualmente sem precisar do app de iPhone ainda (troque
-`SEU_TOPICO` pelo valor real):
+1. Confirme que existe um `venv/` na pasta do vIsper com tudo
+   instalado — o LaunchAgent aponta pra esse interpretador específico.
+2. `cp launchd/com.valeta.visper.plist ~/Library/LaunchAgents/` e troque
+   as 4 ocorrências de `TROQUE_AQUI_CAMINHO_ABSOLUTO_DO_VISPER` pelo
+   caminho real (descubra com `pwd`).
+3. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.valeta.visper.plist`
+4. Conferir: `launchctl list | grep com.valeta.visper`. Se o ícone não
+   aparecer, os logs estão em `visper.out.log` / `visper.err.log`, na
+   pasta do vIsper.
+
+Pra desligar:
 ```bash
-curl -d "vIsper claude confirma o teste" https://ntfy.sh/SEU_TOPICO
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.valeta.visper.plist
+rm ~/Library/LaunchAgents/com.valeta.visper.plist
 ```
-Isso deve abrir o Claude e colar o texto, exatamente como se tivesse
-sido falado no mic local.
 
-O lado do iPhone (`ios/SendToVisperIntent.swift`) é um **rascunho
-ainda não compilado** — escrito sem acesso a Xcode. Precisa: criar um
-projeto Xcode novo, colar o arquivo dentro, trocar o placeholder do
-tópico pelo mesmo valor de `NTFY_TOPIC`, e testar de ponta a ponta.
+**Escolha um dos dois, não os dois.** Itens de Início com o `.app` E o
+LaunchAgent ao mesmo tempo abre duas cópias do vIsper, que vão brigar
+pelo microfone.
 
-## Limite atual do reconhecimento de wake word
+O LaunchAgent reinicia o app se ele **crashar**, mas não reabre depois
+de você clicar em Quit — a distinção é proposital.
 
-Hoje o app usa Whisper (transcrição geral) pra "ouvir" a wake word —
-ele tenta escrever a palavra que você disse. Se `WAKE_WORD` for uma
-palavra inventada (tipo "vIsper" mesmo), o Whisper pode transcrever
-errado e o comando falha silenciosamente. Funciona melhor com wake
-words que sejam palavras reais e distintas.
+---
 
-## Próximo passo recomendado: Porcupine
+## Porcupine — wake word de verdade (opcional)
 
-Pra ter uma wake word de verdade — que reconhece o *som* da palavra
-escolhida, não uma transcrição escrita — o caminho é o motor
-**Porcupine** (Picovoice). Ele deixa treinar uma palavra 100%
-personalizada, mesmo inventada, digitando ela num site (não precisa
-gravar áudio nem saber ML), e evita tanto falha em reconhecer a wake
-word quanto corte precoce do ditado por falso positivo.
+Hoje o vIsper "ouve" a palavra de ativação transcrevendo tudo e
+procurando ela no texto. O Porcupine reconhece o **som** da palavra, o
+que resolve tanto a falha em reconhecer quanto o corte precoce por
+falso positivo. É grátis pra uso pessoal.
 
-O wrapper já existe (`wake_word_porcupine.py`, testado no que dá pra
-testar sem os dados abaixo) — falta só a integração em `main.py`
-(dois loops de áudio rodando junto, ver nota no topo do arquivo) e os
-dois valores que só você consegue pegar:
+1. Conta grátis em `console.picovoice.ai`
+2. Copie o **AccessKey** do painel
+3. Na seção Porcupine, digite sua palavra e treine (não precisa gravar
+   áudio nem saber nada de ML)
+4. Baixe o arquivo `.ppn` pra macOS
+5. `python3 setup_visper.py` → responda "sim" na pergunta do Porcupine
 
-1. Criar conta grátis em `console.picovoice.ai`
-2. Copiar o **AccessKey** da conta (fica no painel principal, não
-   precisa treinar nada pra conseguir esse valor)
-3. Na seção Porcupine, digitar a wake word e treinar
-4. Baixar o arquivo `.ppn` gerado pra macOS
-5. Colar os dois em `config.py`: `PORCUPINE_ACCESS_KEY` (o do passo 2)
-   e `PORCUPINE_KEYWORD_PATH` (caminho do `.ppn` do passo 4)
+O Porcupine reconhece só a palavra de ativação, não os
+`CLOSE_TRIGGERS` — cada palavra precisa do próprio treino.
 
-Vale checar o limite atual do plano grátis deles ao criar a conta —
-os planos mudam com frequência.
+---
 
-## O que ainda falta (em aberto)
+## Estado do projeto — o que é testado e o que não é
 
-1. **Upload de áudio direto (voice notes de WhatsApp etc.).** O
-   código já existe (`audio_file_input.py`, testado com Whisper
-   simulado) — transcreve um arquivo ou vigia uma pasta, reaproveita
-   o mesmo `WhisperModel` e o mesmo `DictationSession` do mic, sem
-   mandar áudio bruto pra nenhuma IA (nenhuma delas aceita isso
-   direto). Falta só chamar isso de dentro de `main.py` — hoje é uma
-   peça solta, sem menu nem pasta configurada.
-2. **Interface de configuração.** Hoje os comandos só são editáveis
-   mexendo em `config.py`. Uma tela simples pra isso é o passo
-   natural depois que a lógica estiver redonda.
-3. **Multiplataforma de verdade.** A v1 é só Mac (rumps + AppleScript).
-   `audio_input.py`, `command_router.py`, `dictation.py` e `config.py`
-   já são portáveis — só `actions.py` e o wrapper de menu bar
-   (`main.py`) precisariam de uma versão Windows.
+Honestidade sobre o que foi validado de verdade:
 
-Dois conceitos de design já existem em `design/` — mascote colorido
-e uma versão monocromática pro ícone da barra de menu (ver
-`design/DESIGN.md`). Ainda não reagido pela Valeta, então pode mudar
-bastante antes de virar assets de verdade.
+| Peça | Como foi validada |
+|---|---|
+| Lógica do núcleo (roteamento, ditado, texto, config) | 215 testes automatizados |
+| App de iPhone (`docs/`) | 25 testes num navegador de verdade (Chromium), a cada push |
+| `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
+| Segredos fora do repositório | Verificado no CI a cada push |
+| Microfone, permissões do macOS, barra de menu | **Nunca rodou num Mac de verdade** |
+| Relay do ntfy | **Nunca testado contra o ntfy.sh real** (o sandbox onde foi escrito bloqueia) |
+| Porcupine com áudio real | **Nunca testado** |
+| LaunchAgent | **Nunca carregado por um launchctl de verdade** |
 
+O que está na metade de baixo depende de hardware e de um Mac de
+verdade — é o que só o seu teste vai dizer.
+
+---
+
+## O que ainda falta
+
+1. **Upload de áudio direto** (voice notes do WhatsApp etc.) — o código
+   existe (`audio_file_input.py`, testado com transcritor simulado),
+   mas ainda não está ligado no menu.
+2. **Feedback visual mais rico** — hoje o estado é o ícone colorido; o
+   mockup em `design/layouts_mockup.html` mostra um painel bem mais
+   completo.
+3. **Windows/Linux** — a v1 é só Mac. `audio_input.py`,
+   `command_router.py`, `dictation.py`, `text_utils.py` e `config.py`
+   já são portáveis; `actions.py` e `main.py` precisariam de uma versão
+   por sistema.

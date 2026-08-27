@@ -1,0 +1,129 @@
+name: Build macOS app
+
+# Compila o vIsper.app/.dmg num macOS DE VERDADE (runner da GitHub) e
+# publica o resultado pra download. Motivo de existir: sem isso, a única
+# forma de ter o DMG é rodar ./build_mac_app.sh localmente — o que exige
+# venv + pip + Homebrew funcionando primeiro, exatamente o atrito que o
+# app deveria eliminar.
+#
+# Efeito colateral igualmente importante: este é o PRIMEIRO lugar onde o
+# empacotamento roda num macOS real. Enquanto ele estiver vermelho, o
+# .app não funciona — e isso fica visível aqui em vez de virar um app
+# que abre e morre calado na máquina dela.
+#
+# Runner macOS é gratuito e sem limite de minutos em repositório público
+# (que é o caso deste). Nada disso custa nada.
+
+on:
+  workflow_dispatch:        # botão "Run workflow" na aba Actions
+  push:
+    tags:
+      - "v*"                # v1.0.0 etc. publica uma Release
+    branches:
+      - main
+      - "claude/**"
+    paths:                  # não recompila por mudança de documentação
+      - "**.py"
+      - "requirements.txt"
+      - "build_mac_app.sh"
+      - "design/**"
+      - ".github/workflows/build-macos.yml"
+
+permissions:
+  contents: write           # necessário só pra criar a Release
+
+jobs:
+  build:
+    name: ${{ matrix.nome }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          # Só Apple Silicon. Existia um build Intel (macos-13), mas o
+          # GitHub aposentou esses runners: o job ficava 24h na fila e
+          # era cancelado sozinho, TODA vez — três execuções seguidas,
+          # zero sucesso. Não era lentidão, era um runner que não
+          # existe mais. Mac Intel (pré-2020) ainda funciona pelo
+          # caminho de desenvolvedor do README (python3 main.py, ou
+          # ./build_mac_app.sh na própria máquina).
+          - runner: macos-14
+            arch: AppleSilicon
+            nome: Apple Silicon (M1/M2/M3/M4)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          # 3.11 de propósito: py2app e as rodas nativas do
+          # faster-whisper (ctranslate2/onnxruntime/av) são bem mais
+          # estáveis nela do que nas versões mais novas.
+          python-version: "3.11"
+
+      - name: Instalar PortAudio
+        # As rodas do sounddevice pra macOS já trazem o libportaudio
+        # embutido, então isso costuma ser redundante — mas é barato e
+        # cobre o caso de o pip cair num build de fonte.
+        run: brew install portaudio || true
+
+      - name: Compilar .app e .dmg
+        # Roda EXATAMENTE o mesmo script que ela rodaria na máquina
+        # dela. Se quebrar aqui, quebraria lá.
+        run: ./build_mac_app.sh
+
+      - name: Conferir que o bundle ficou de pé
+        # A falha mais traiçoeira do py2app é gerar um .app que abre e
+        # morre calado por falta de uma lib nativa. Aqui isso vira um
+        # check vermelho em vez de uma surpresa no Mac dela.
+        run: |
+          set -euo pipefail
+          test -d "dist/vIsper.app" || { echo "não gerou o .app"; exit 1; }
+          test -f "vIsper.dmg"     || { echo "não gerou o .dmg"; exit 1; }
+
+          echo "--- Info.plist ---"
+          plutil -p "dist/vIsper.app/Contents/Info.plist" | \
+            grep -E "LSUIElement|CFBundleIdentifier|UsageDescription" || true
+
+          echo "--- assinatura ---"
+          codesign -dv "dist/vIsper.app" 2>&1 | head -5 || true
+
+          echo "--- abre sem morrer? ---"
+          # 20s é bem mais do que o app precisa pra chegar na barra de
+          # menu (o modelo do Whisper carrega em segundo plano, ver
+          # main.py). Se o processo sumir antes disso, faltou lib.
+          "dist/vIsper.app/Contents/MacOS/vIsper" &
+          APP_PID=$!
+          sleep 20
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "OK — continua vivo depois de 20s"
+            kill "$APP_PID" 2>/dev/null || true
+          else
+            echo "FALHOU — o app morreu sozinho. Log:"
+            log show --last 2m --predicate 'process == "vIsper"' \
+              --style compact 2>/dev/null | tail -60 || true
+            exit 1
+          fi
+
+      - name: Renomear com a arquitetura
+        run: mv vIsper.dmg "vIsper-${{ matrix.arch }}.dmg"
+
+      - name: Publicar o DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: vIsper-${{ matrix.arch }}
+          path: vIsper-${{ matrix.arch }}.dmg
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Anexar à Release (só quando é tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "vIsper ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            || echo "release já existe, só anexando"
+          gh release upload "${GITHUB_REF_NAME}" \
+            "vIsper-${{ matrix.arch }}.dmg" --clobber

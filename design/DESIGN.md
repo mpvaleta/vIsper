@@ -35,3 +35,42 @@ detalhes de rosto (não sobrevivem no tamanho minúsculo da barra de
 menu) e mantive só a silhueta + a onda sonora, preto sólido, pronto
 pra usar como "template image" do macOS (o sistema inverte a cor
 sozinho conforme o modo claro/escuro).
+
+## App de iPhone — como ficou de verdade
+
+`iphone_app_claro.png` / `iphone_app_escuro.png` são capturas REAIS do
+app (`docs/index.html`) rodando num Chromium com viewport de iPhone 13
+— não mockup. É a primeira peça do projeto com aparência validada em
+vez de imaginada.
+
+Traduz a paleta de status pra tela: o ponto ao lado de "Ready" muda de
+cor conforme o estado (cinza ocioso, coral ditando, âmbar mandando,
+azul enviado, terracota offline), e as cores de MARCA (lavanda) ficam
+só no logo, nos chips de IA e no botão — a separação que o CLAUDE.md
+exige.
+
+Dois defeitos que só apareceram na captura, e que nenhuma leitura de
+código pegaria:
+- O anel de contagem do envio automático ficava desenhado por cima do
+  botão o tempo todo. O atributo `hidden` NÃO esconde elemento SVG — a
+  regra `[hidden] { display: none }` do navegador vale só pro namespace
+  HTML. Precisou de uma regra CSS explícita.
+- O mascote no badge do cabeçalho estava minúsculo e jogado num canto:
+  o `viewBox` era o `0 0 400 400` do arquivo original, com muita
+  moldura vazia em volta do desenho. Recortado pro conteúdo real
+  (`130 114 185 185`).
+
+## Barra de menu do Mac
+
+O ícone do app É o estado, com a mesma paleta semântica (ver
+`main.STATE_GLYPHS`): ⏳ carregando, 🎙 parado, 🟢 escutando,
+🔴 ditando, 🔵 mandou, 🟠 erro.
+
+Círculo colorido em vez do glifo monocromático de
+`menubar_icon_template.svg` por um motivo prático: a convenção da
+Apple (silhueta template, invertida pelo sistema) é boa pra IDENTIDADE,
+mas não consegue comunicar ESTADO — template image é uma cor só, por
+definição. Trocar o desenho a cada estado exigiria seis assets e não
+resolveria o mais importante, que é dar pra distinguir de relance
+"escutando" de "parado". O glifo continua valendo pra quando o app
+tiver um ícone fixo de identidade.

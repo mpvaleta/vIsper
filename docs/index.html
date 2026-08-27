@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>vIsper</title>
+
+<!-- Faz o iPhone tratar isto como app de verdade depois de
+     Compartilhar -> Adicionar a Tela de Inicio: abre em tela cheia,
+     sem barra de endereco do Safari. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="vIsper">
+<meta name="theme-color" content="#A48FE6">
+<meta name="description" content="Talk to your Mac from anywhere.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+
+<style>
+  /* Paleta vinda de design/layouts_mockup.html — lavanda/mint sao cores
+     de MARCA, nunca de estado; estado usa a paleta semantica separada
+     (ver CLAUDE.md, "Cor de marca separada de cor de status"). */
+  :root {
+    --lavender: #A48FE6;
+    --lavender-dark: #8E76D9;
+    --lavender-light: #CCC0F4;
+    --lavender-pale: #EFEAFB;
+    --mint-1: #9FDCC0;
+    --teal: #4FC7B8;
+
+    --st-idle: #9B96A8;
+    --st-listening: #2FAE5C;
+    --st-connecting: #E0A83E;
+    --st-dictating: #E0645A;
+    --st-sent: #4E7FE0;
+    --st-offline: #B5726B;
+
+    --bg: #F6F4FB;
+    --bg-2: #ECE7F8;
+    --surface: #FFFFFF;
+    --ink: #2B2B2B;
+    --muted: #6E6880;
+    --line: rgba(43,43,43,0.10);
+    --shadow: 0 10px 34px rgba(90,70,140,0.16);
+  }
+
+  /* Escuro por preferencia do sistema. Forma plana de propósito: o
+     aninhamento de @media dentro de seletor e CSS Nesting, recente
+     demais pra confiar num iPhone que pode estar em iOS antigo. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16131F;
+      --bg-2: #1E1A2B;
+      --surface: #241F33;
+      --ink: #F2EFF9;
+      /* Clareado em relacao ao tema claro: #6E6880 sobre #241F33 da
+         cerca de 2.7:1, abaixo do minimo AA. */
+      --muted: #A9A2BE;
+      --line: rgba(255,255,255,0.12);
+      --shadow: 0 10px 34px rgba(0,0,0,0.44);
+      --st-idle: #A9A2BE;
+      --st-listening: #56C97E;
+      --st-connecting: #F0BE5E;
+      --st-dictating: #F0847A;
+      --st-sent: #7BA1EC;
+      --st-offline: #D0948D;
+    }
+    :root:not([data-theme="light"]) .ai-chip[aria-pressed="true"] {
+      background: rgba(164,143,230,0.20);
+      color: var(--lavender-light);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #16131F;
+    --bg-2: #1E1A2B;
+    --surface: #241F33;
+    --ink: #F2EFF9;
+    --muted: #A9A2BE;
+    --line: rgba(255,255,255,0.12);
+    --shadow: 0 10px 34px rgba(0,0,0,0.44);
+    --st-idle: #A9A2BE;
+    --st-listening: #56C97E;
+    --st-connecting: #F0BE5E;
+    --st-dictating: #F0847A;
+    --st-sent: #7BA1EC;
+    --st-offline: #D0948D;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0;
+    min-height: 100svh;
+    background: linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    /* env() mantem o conteudo fora do notch e da barra de gestos
+       quando roda em tela cheia na tela de inicio. */
+    padding:
+      calc(env(safe-area-inset-top) + 14px)
+      calc(env(safe-area-inset-right) + 18px)
+      calc(env(safe-area-inset-bottom) + 18px)
+      calc(env(safe-area-inset-left) + 18px);
+  }
+
+  /* ---------------- topo ---------------- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+    flex-shrink: 0;
+  }
+  .logo {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    background: linear-gradient(180deg, var(--lavender-light), var(--lavender));
+    display: grid; place-items: center;
+    box-shadow: 0 3px 10px rgba(164,143,230,0.42);
+    flex-shrink: 0;
+  }
+  .logo svg { width: 20px; height: 20px; display: block; }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+
+  .status {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 600;
+    color: var(--st-idle);
+    /* Transiciona so cor: nao dispara layout. */
+    transition: color .2s ease;
+  }
+  .status .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .status[data-state="listening"] { color: var(--st-listening); }
+  .status[data-state="connecting"] { color: var(--st-connecting); }
+  .status[data-state="dictating"] { color: var(--st-dictating); }
+  .status[data-state="sent"] { color: var(--st-sent); }
+  .status[data-state="offline"] { color: var(--st-offline); }
+
+  /* Pulso do ponto: so transform/opacity, entao roda no compositor e
+     nao repinta layout a 60fps. */
+  .status[data-state="listening"] .dot,
+  .status[data-state="dictating"] .dot {
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .45; transform: scale(.78); }
+  }
+
+  .icon-btn {
+    background: none; border: 0; padding: 6px;
+    color: var(--muted); cursor: pointer;
+    display: grid; place-items: center;
+    border-radius: 8px;
+    min-width: 34px; min-height: 34px;
+  }
+  .icon-btn:active { background: var(--lavender-pale); }
+  .icon-btn svg { width: 19px; height: 19px; display: block; }
+
+  /* ---------------- aviso de instalacao ---------------- */
+  .install-tip {
+    background: var(--lavender-pale);
+    border: 1.5px solid var(--lavender-light);
+    border-radius: 13px;
+    padding: 13px 15px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--lavender-dark);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+  .install-tip strong { font-size: 13.5px; }
+  .install-tip em { font-style: normal; font-weight: 700; }
+  :root[data-theme="dark"] .install-tip {
+    background: rgba(164,143,230,0.16);
+    border-color: rgba(164,143,230,0.34);
+    color: var(--lavender-light);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .install-tip {
+      background: rgba(164,143,230,0.16);
+      border-color: rgba(164,143,230,0.34);
+      color: var(--lavender-light);
+    }
+  }
+
+  /* ---------------- seletor de IA ---------------- */
+  .ai-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 9px;
+    margin-bottom: 16px;
+    flex-shrink: 0;
+  }
+  .ai-chip {
+    appearance: none;
+    border: 1.5px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    border-radius: 13px;
+    padding: 13px 10px;
+    font-size: 14px; font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    /* Sem transition em border-color junto de transform pra evitar
+       repaint desnecessario; as duas sao baratas aqui. */
+    transition: border-color .16s ease, background .16s ease, transform .1s ease;
+  }
+  .ai-chip:active { transform: scale(.97); }
+  .ai-chip[aria-pressed="true"] {
+    border-color: var(--lavender);
+    background: var(--lavender-pale);
+    color: var(--lavender-dark);
+  }
+  :root[data-theme="dark"] .ai-chip[aria-pressed="true"] {
+    background: rgba(164,143,230,0.20);
+    color: var(--lavender-light);
+  }
+  .ai-chip .swatch {
+    width: 9px; height: 9px; border-radius: 3px;
+    background: var(--lavender); flex-shrink: 0;
+  }
+
+  /* ---------------- area de texto ---------------- */
+  .field-wrap { position: relative; flex: 1; display: flex; min-height: 120px; }
+  textarea {
+    flex: 1;
+    width: 100%;
+    border: 1.5px solid var(--line);
+    border-radius: 16px;
+    background: var(--surface);
+    color: var(--ink);
+    /* 16px minimo: abaixo disso o iOS DA ZOOM sozinho ao focar o
+       campo e a tela pula. */
+    font-size: 16px;
+    line-height: 1.45;
+    font-family: inherit;
+    padding: 15px;
+    resize: none;
+    box-shadow: var(--shadow);
+    transition: border-color .16s ease;
+  }
+  textarea:focus { outline: none; border-color: var(--lavender); }
+  textarea::placeholder { color: var(--muted); opacity: .85; }
+
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 9px 2px 0;
+    line-height: 1.45;
+    flex-shrink: 0;
+  }
+
+  /* ---------------- botoes de acao ---------------- */
+  .actions {
+    display: flex; gap: 10px; align-items: stretch;
+    margin-top: 14px;
+    flex-shrink: 0;
+  }
+  .btn {
+    appearance: none; border: 0; font-family: inherit;
+    border-radius: 15px;
+    font-size: 16px; font-weight: 700;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: transform .1s ease, opacity .16s ease;
+    /* 52px: alvo de toque confortavel com a mao ocupada (o caso de uso
+       e usar isto no treino). */
+    min-height: 52px;
+  }
+  .btn:active { transform: scale(.975); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn-primary {
+    flex: 1;
+    background: linear-gradient(180deg, var(--lavender), var(--lavender-dark));
+    color: #fff;
+    box-shadow: 0 5px 16px rgba(142,118,217,0.42);
+  }
+  .btn-mic {
+    width: 52px;
+    background: var(--surface);
+    color: var(--lavender-dark);
+    border: 1.5px solid var(--line);
+  }
+  .btn-mic[data-recording="true"] {
+    background: var(--st-dictating);
+    border-color: var(--st-dictating);
+    color: #fff;
+    animation: rec 1.4s ease-in-out infinite;
+  }
+  @keyframes rec {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(224,100,90,0.52); }
+    70% { box-shadow: 0 0 0 13px rgba(224,100,90,0); }
+  }
+  .btn svg { width: 21px; height: 21px; display: block; }
+
+  /* Anel de contagem do envio automatico. */
+  .countdown { position: relative; }
+  .countdown svg.ring {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    /* Comeca no topo em vez de as 3h. */
+    transform: rotate(-90deg);
+  }
+  /* O atributo `hidden` NAO esconde elemento SVG: a regra
+     `[hidden] { display: none }` do navegador vale so pro namespace
+     HTML. Sem esta linha o anel de contagem fica desenhado por cima do
+     "Send to Mac" o tempo todo, como se estivesse sempre contando. */
+  .countdown svg.ring[hidden] { display: none; }
+  .countdown svg.ring circle {
+    fill: none;
+    stroke: rgba(255,255,255,0.85);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+  }
+
+  /* ---------------- toast ---------------- */
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(env(safe-area-inset-bottom) + 22px);
+    transform: translate(-50%, 22px);
+    background: var(--ink);
+    color: var(--bg);
+    padding: 11px 17px;
+    border-radius: 12px;
+    font-size: 13.5px; font-weight: 600;
+    box-shadow: var(--shadow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease, transform .2s ease;
+    max-width: calc(100vw - 40px);
+    text-align: center;
+    z-index: 50;
+  }
+  .toast[data-show="true"] { opacity: 1; transform: translate(-50%, 0); }
+  .toast[data-kind="error"] { background: var(--st-offline); color: #fff; }
+  .toast[data-kind="ok"] { background: var(--st-sent); color: #fff; }
+
+  /* ---------------- tela de configuracao ---------------- */
+  .screen { display: none; flex-direction: column; flex: 1; }
+  .screen[data-active="true"] { display: flex; }
+
+  .setup-card {
+    background: var(--surface);
+    border-radius: 17px;
+    padding: 19px;
+    box-shadow: var(--shadow);
+    margin-bottom: 14px;
+  }
+  .setup-card h2 { margin: 0 0 9px; font-size: 16px; }
+  .setup-card p { margin: 0 0 13px; font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+  label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  input[type="text"] {
+    width: 100%;
+    border: 1.5px solid var(--line);
+    border-radius: 11px;
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--lavender); }
+  .row-toggle {
+    display: flex; align-items: center; gap: 11px;
+    padding: 11px 0;
+    border-top: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .row-toggle .lbl { flex: 1; }
+  .row-toggle .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .switch { position: relative; width: 50px; height: 30px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .switch .track {
+    position: absolute; inset: 0;
+    background: var(--st-idle);
+    border-radius: 15px;
+    transition: background .18s ease;
+    pointer-events: none;
+  }
+  .switch .thumb {
+    position: absolute; top: 3px; left: 3px;
+    width: 24px; height: 24px;
+    background: #fff; border-radius: 50%;
+    transition: transform .18s ease;
+    pointer-events: none;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.28);
+  }
+  .switch input:checked ~ .track { background: var(--st-listening); }
+  .switch input:checked ~ .thumb { transform: translateX(20px); }
+
+  .danger { color: var(--st-offline); font-weight: 600; }
+
+  /* Quem pediu menos movimento no sistema recebe menos movimento aqui,
+     inclusive nos keyframes infinitos (o pulso e o anel do gravador,
+     que sao os mais incomodos por nunca pararem). */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo" aria-hidden="true">
+    <!-- Silhueta do mascote (design/menubar_icon_template.svg).
+         viewBox recortado no conteudo real (x 135-310, y 123-290) em
+         vez do 0 0 400 400 do arquivo original: com a moldura inteira
+         o desenho ficava minusculo e jogado num canto do badge. -->
+    <svg viewBox="130 114 185 185" fill="#fff">
+      <rect x="163" y="135" width="11" height="48" rx="5.5"/>
+      <circle cx="168.5" cy="133" r="10"/>
+      <rect x="226" y="135" width="11" height="48" rx="5.5"/>
+      <circle cx="231.5" cy="133" r="10"/>
+      <rect x="135" y="175" width="130" height="115" rx="24"/>
+      <path d="M 292 176 Q 303 194 292 212" stroke="#fff" stroke-width="15" fill="none" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <div class="brand">vIsper</div>
+  <div class="status" id="status" data-state="idle" role="status" aria-live="polite">
+    <span class="dot"></span><span id="status-text">Ready</span>
+  </div>
+  <button class="icon-btn" id="btn-settings" aria-label="Settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </button>
+</header>
+
+<!-- ==================== TELA PRINCIPAL ==================== -->
+<div class="screen" id="screen-main" data-active="false">
+  <!-- So aparece enquanto isto for uma aba do Safari. Ver readHash():
+       o app da tela de inicio nao herda o armazenamento do Safari, e a
+       URL do atalho e o que carrega o topico pra la. -->
+  <div class="install-tip" id="install-tip" hidden>
+    <strong>Add vIsper to your Home Screen</strong>
+    <span>Tap the Share button below, then <em>Add to Home Screen</em>. Do it now — it carries your connection over.</span>
+  </div>
+
+  <div class="ai-grid" id="ai-grid" role="group" aria-label="Which AI to open"></div>
+
+  <div class="field-wrap">
+    <textarea id="text" placeholder="Tap the mic, or type here — then send."
+              autocapitalize="sentences" autocorrect="on" spellcheck="true"></textarea>
+  </div>
+
+  <p class="hint" id="hint"></p>
+
+  <div class="actions">
+    <button class="btn btn-mic" id="btn-mic" data-recording="false" aria-label="Start dictation">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <rect x="9" y="2" width="6" height="12" rx="3"/>
+        <path d="M5 10a7 7 0 0 0 14 0"/>
+        <path d="M12 17v5"/>
+      </svg>
+    </button>
+    <button class="btn btn-primary countdown" id="btn-send">
+      <svg class="ring" viewBox="0 0 100 100" aria-hidden="true" hidden>
+        <circle id="ring-path" cx="50" cy="50" r="46"/>
+      </svg>
+      <span id="send-label">Send to Mac</span>
+    </button>
+  </div>
+</div>
+
+<!-- ==================== TELA DE CONFIGURACAO ==================== -->
+<div class="screen" id="screen-setup" data-active="false">
+  <div class="setup-card">
+    <h2>Connect to your Mac</h2>
+    <p>
+      Run <code>python3 setup_visper.py</code> on your Mac. It prints a link —
+      open that link here and this fills in automatically.
+    </p>
+
+    <label for="in-topic">ntfy topic</label>
+    <input type="text" id="in-topic" placeholder="visper-..." autocapitalize="off"
+           autocorrect="off" spellcheck="false">
+
+    <label for="in-wake">Wake word</label>
+    <input type="text" id="in-wake" placeholder="vIsper" autocapitalize="off"
+           autocorrect="off" spellcheck="false">
+
+    <div class="row-toggle">
+      <div class="lbl">
+        Auto-send after speaking
+        <div class="sub">Sends on its own once you stop talking. You get 3 seconds to cancel.</div>
+      </div>
+      <div class="switch">
+        <input type="checkbox" id="in-autosend" checked>
+        <span class="track"></span><span class="thumb"></span>
+      </div>
+    </div>
+
+    <div class="row-toggle">
+      <div class="lbl">
+        Keep text after sending
+        <div class="sub">Off means the box clears itself, ready for the next one.</div>
+      </div>
+      <div class="switch">
+        <input type="checkbox" id="in-keep">
+        <span class="track"></span><span class="thumb"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="setup-card">
+    <h2>Keep this private</h2>
+    <p>
+      Your topic is the only thing stopping strangers from typing into your Mac.
+      Anyone who learns it can trigger it. Never post it anywhere. If it leaks,
+      run the setup on your Mac again to roll a new one.
+    </p>
+    <p class="danger" id="host-warning" hidden></p>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-primary" id="btn-save">Save</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var STORE = "visper.settings.v1";
+  var NTFY = "https://ntfy.sh/";
+
+  // Espelha config.AI_TRIGGERS do Mac: o valor e a chave que o
+  // command_router procura na fala.
+  var AIS = [
+    { id: "claude", label: "Claude" },
+    { id: "chatgpt", label: "ChatGPT" },
+    { id: "perplexity", label: "Perplexity" },
+    { id: "gemini", label: "Gemini" }
+  ];
+
+  var defaults = {
+    topic: "",
+    wake: "vIsper",
+    ai: "claude",
+    autosend: true,
+    keep: false
+  };
+
+  var s = load();
+  var recog = null;
+  var recording = false;
+  var countdownTimer = null;
+  var toastTimer = null;
+
+  // ---------------- armazenamento ----------------
+  // Safari em modo privado faz localStorage lancar excecao ao gravar.
+  // Nesse caso o app funciona igual, so nao lembra a configuracao —
+  // melhor que uma tela branca.
+  function load() {
+    var out = {};
+    for (var k in defaults) out[k] = defaults[k];
+    try {
+      var raw = localStorage.getItem(STORE);
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        for (var key in defaults) {
+          if (Object.prototype.hasOwnProperty.call(parsed, key) &&
+              typeof parsed[key] === typeof defaults[key]) {
+            out[key] = parsed[key];
+          }
+        }
+      }
+    } catch (e) { /* segue com os padroes */ }
+    return out;
+  }
+
+  function save() {
+    try { localStorage.setItem(STORE, JSON.stringify(s)); }
+    catch (e) { toast("Could not save settings on this device.", "error"); }
+  }
+
+  // ---------------- link de configuracao ----------------
+  // O setup do Mac gera .../#t=TOPICO&w=WAKE. O fragmento (#) NAO e
+  // enviado ao servidor por nenhum navegador, entao o topico nunca
+  // aparece em log do GitHub Pages — foi por isso que ele vai depois
+  // do # e nao como ?query.
+  function isStandalone() {
+    // navigator.standalone e o sinal do iOS; display-mode cobre o resto.
+    return window.navigator.standalone === true ||
+           (window.matchMedia &&
+            window.matchMedia("(display-mode: standalone)").matches);
+  }
+
+  function readHash() {
+    var hash = location.hash.replace(/^#/, "");
+    if (!hash) return false;
+    var params = new URLSearchParams(hash);
+    var t = params.get("t");
+    var w = params.get("w");
+    var mudou = false;
+    if (t) { s.topic = t.trim(); mudou = true; }
+    if (w) { s.wake = w.trim(); mudou = true; }
+    if (mudou) save();
+
+    // O hash SO e apagado depois que isto ja esta rodando como app da
+    // tela de inicio.
+    //
+    // Motivo, e e uma armadilha do iOS especifica: um app adicionado a
+    // tela de inicio tem armazenamento SEPARADO do Safari. O topico
+    // salvo aqui enquanto e uma aba do Safari nao existe la dentro. O
+    // que atravessa e a URL guardada no atalho — entao o hash precisa
+    // continuar na barra de endereco na hora do "Adicionar a Tela de
+    // Inicio", senao o app abre vazio e ela tem que digitar 32
+    // caracteres aleatorios a mao.
+    //
+    // (E por isso tambem que o manifest nao define start_url: com ele,
+    // o iOS guardaria a URL do manifest no lugar da atual, jogando o
+    // hash fora do mesmo jeito.)
+    if (mudou && isStandalone()) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+    return mudou;
+  }
+
+  // ---------------- helpers de UI ----------------
+  var $ = function (id) { return document.getElementById(id); };
+
+  function setStatus(state, text) {
+    $("status").setAttribute("data-state", state);
+    $("status-text").textContent = text;
+  }
+
+  function toast(msg, kind) {
+    var el = $("toast");
+    el.textContent = msg;
+    el.setAttribute("data-kind", kind || "info");
+    el.setAttribute("data-show", "true");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      el.setAttribute("data-show", "false");
+    }, kind === "error" ? 5200 : 2600);
+  }
+
+  function showScreen(name) {
+    $("screen-main").setAttribute("data-active", String(name === "main"));
+    $("screen-setup").setAttribute("data-active", String(name === "setup"));
+  }
+
+  // ---------------- seletor de IA ----------------
+  function buildAiGrid() {
+    var grid = $("ai-grid");
+    grid.innerHTML = "";
+    AIS.forEach(function (ai) {
+      var b = document.createElement("button");
+      b.className = "ai-chip";
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(s.ai === ai.id));
+      b.innerHTML = '<span class="swatch"></span>' + ai.label;
+      b.addEventListener("click", function () {
+        s.ai = ai.id;
+        save();
+        buildAiGrid();
+      });
+      grid.appendChild(b);
+    });
+  }
+
+  // ---------------- ditado ----------------
+  function speechSupported() {
+    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  }
+
+  function updateHint() {
+    if (speechSupported()) {
+      $("hint").textContent =
+        "Tap the mic and just talk." +
+        (s.autosend ? " It sends by itself when you stop." : "");
+    } else {
+      // iOS antigo (ou navegador sem Web Speech): o teclado do proprio
+      // iPhone tem a tecla de microfone, que resolve igual.
+      $("hint").textContent =
+        "Tap the box, then the microphone key on your keyboard.";
+      $("btn-mic").disabled = true;
+    }
+  }
+
+  function startDictation() {
+    if (recording) { stopDictation(); return; }
+    var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Rec) return;
+
+    cancelCountdown();
+    recog = new Rec();
+    recog.lang = navigator.language || "en-US";
+    recog.interimResults = true;
+    recog.continuous = false;
+
+    var base = $("text").value;
+    if (base && !/\s$/.test(base)) base += " ";
+
+    recog.onstart = function () {
+      recording = true;
+      $("btn-mic").setAttribute("data-recording", "true");
+      $("btn-mic").setAttribute("aria-label", "Stop dictation");
+      setStatus("dictating", "Listening");
+    };
+
+    recog.onresult = function (ev) {
+      var txt = "";
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        txt += ev.results[i][0].transcript;
+      }
+      $("text").value = base + txt;
+    };
+
+    recog.onerror = function (ev) {
+      recording = false;
+      $("btn-mic").setAttribute("data-recording", "false");
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        setStatus("offline", "No mic");
+        toast("Microphone blocked. Allow it in Settings › Safari.", "error");
+      } else if (ev.error === "no-speech") {
+        setStatus("idle", "Ready");
+      } else {
+        setStatus("offline", "Error");
+        toast("Dictation failed: " + ev.error, "error");
+      }
+    };
+
+    recog.onend = function () {
+      recording = false;
+      $("btn-mic").setAttribute("data-recording", "false");
+      $("btn-mic").setAttribute("aria-label", "Start dictation");
+      if ($("text").value.trim()) {
+        if (s.autosend) startCountdown();
+        else setStatus("idle", "Ready");
+      } else {
+        setStatus("idle", "Ready");
+      }
+    };
+
+    try { recog.start(); }
+    catch (e) { toast("Could not start dictation.", "error"); }
+  }
+
+  function stopDictation() {
+    if (recog) { try { recog.stop(); } catch (e) {} }
+  }
+
+  // ---------------- envio automatico com janela de cancelamento ----------------
+  // Enviar sozinho e o que torna isto util de mao ocupada; a janela de
+  // 3s existe porque transcricao erra, e mandar coisa errada pro chat e
+  // pior do que um toque a mais.
+  function startCountdown() {
+    var SEGUNDOS = 3;
+    var ring = document.querySelector(".ring");
+    var path = $("ring-path");
+    var circ = 2 * Math.PI * 46;
+
+    ring.hidden = false;
+    path.style.strokeDasharray = circ;
+    path.style.strokeDashoffset = 0;
+
+    var inicio = Date.now();
+    setStatus("connecting", "Sending in 3…");
+    $("send-label").textContent = "Tap to cancel";
+
+    countdownTimer = setInterval(function () {
+      var passado = (Date.now() - inicio) / 1000;
+      var restante = SEGUNDOS - passado;
+      if (restante <= 0) {
+        cancelCountdown();
+        send();
+        return;
+      }
+      path.style.strokeDashoffset = circ * (passado / SEGUNDOS);
+      setStatus("connecting", "Sending in " + Math.ceil(restante) + "…");
+    }, 60);
+  }
+
+  function cancelCountdown() {
+    if (!countdownTimer) return false;
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+    document.querySelector(".ring").hidden = true;
+    $("send-label").textContent = "Send to Mac";
+    setStatus("idle", "Ready");
+    return true;
+  }
+
+  // ---------------- envio ----------------
+  function buildMessage(texto) {
+    // Uma string so, no formato que dictation.py resolve numa chamada
+    // unica: wake word + nome da IA + conteudo + gatilho de fechamento.
+    // E exatamente o caminho "abre e fecha no MESMO trecho".
+    return s.wake + " " + s.ai + " " + texto + " over";
+  }
+
+  function send() {
+    var texto = $("text").value.trim();
+    if (!texto) { toast("Nothing to send yet.", "error"); return; }
+    if (!s.topic) { showScreen("setup"); return; }
+
+    setStatus("connecting", "Sending");
+    $("btn-send").disabled = true;
+
+    // Corpo de texto puro => requisicao simples, sem preflight CORS.
+    // Mandar JSON exigiria Content-Type application/json, que dispara
+    // OPTIONS antes e adiciona uma viagem de rede a toa.
+    fetch(NTFY + encodeURIComponent(s.topic), {
+      method: "POST",
+      body: buildMessage(texto)
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        setStatus("sent", "Sent");
+        toast("Sent to your Mac", "ok");
+        if (!s.keep) $("text").value = "";
+        setTimeout(function () { setStatus("idle", "Ready"); }, 2200);
+      })
+      .catch(function (err) {
+        setStatus("offline", "Failed");
+        toast("Could not reach your Mac: " + err.message, "error");
+      })
+      .then(function () {
+        $("btn-send").disabled = false;
+      });
+  }
+
+  // ---------------- configuracao ----------------
+  function openSettings() {
+    $("in-topic").value = s.topic;
+    $("in-wake").value = s.wake;
+    $("in-autosend").checked = s.autosend;
+    $("in-keep").checked = s.keep;
+
+    // ntfy.sh exige HTTPS pro fetch daqui, e o Web Speech tambem so
+    // roda em contexto seguro. Abrir por file:// ou http:// falha de um
+    // jeito que nao explica a si mesmo — entao explica aqui.
+    var w = $("host-warning");
+    if (location.protocol !== "https:" && location.hostname !== "localhost") {
+      w.hidden = false;
+      w.textContent =
+        "This page is not on HTTPS, so sending and dictation will not work. " +
+        "Open it from its https:// address.";
+    } else {
+      w.hidden = true;
+    }
+    showScreen("setup");
+  }
+
+  function saveSettings() {
+    var t = $("in-topic").value.trim();
+    // Tolera colar a URL inteira do ntfy em vez do topico solto — e o
+    // erro mais provavel, e da pra corrigir sozinho.
+    t = t.replace(/^https?:\/\/ntfy\.sh\//i, "").replace(/\/+$/, "");
+
+    s.topic = t;
+    s.wake = $("in-wake").value.trim() || defaults.wake;
+    s.autosend = $("in-autosend").checked;
+    s.keep = $("in-keep").checked;
+    save();
+    updateHint();
+
+    if (!s.topic) { toast("Add your topic to connect.", "error"); return; }
+    $("install-tip").hidden = isStandalone();
+    showScreen("main");
+    toast("Saved", "ok");
+  }
+
+  // ---------------- ligacao ----------------
+  $("btn-settings").addEventListener("click", openSettings);
+  $("btn-save").addEventListener("click", saveSettings);
+  $("btn-mic").addEventListener("click", startDictation);
+  $("btn-send").addEventListener("click", function () {
+    // Durante a contagem, o mesmo botao vira "cancelar" — um alvo so
+    // pra acertar sem olhar.
+    if (cancelCountdown()) return;
+    send();
+  });
+  // Digitar cancela o envio automatico: sinal claro de que ela quer
+  // corrigir antes de mandar.
+  $("text").addEventListener("input", cancelCountdown);
+
+  readHash();
+  buildAiGrid();
+  updateHint();
+  // O aviso de instalar so faz sentido enquanto ela ainda esta no
+  // Safari E ja tem uma conexao pra levar junto.
+  $("install-tip").hidden = isStandalone() || !s.topic;
+  showScreen(s.topic ? "main" : "setup");
+  if (!s.topic) openSettings();
+})();
+</script>
+</body>
+</html>

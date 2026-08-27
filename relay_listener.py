@@ -11,10 +11,18 @@ processa o áudio local — é o mesmo pipeline testado, só muda de onde
 o texto vem.
 
 IMPORTANTE (segurança): tópicos do ntfy.sh não têm senha por padrão —
-qualquer um que adivinhar o nome do tópico pode mandar comando pro
-seu Mac, e isso aciona automação de verdade (abrir apps, colar texto,
-simular Enter). Configure NTFY_TOPIC em config.py com um nome longo e
-aleatório — nunca algo óbvio tipo "visper" ou o seu nome.
+quem souber o nome do tópico manda comando pro seu Mac, e isso aciona
+automação de verdade (abrir apps, colar texto, simular Enter). O nome
+do tópico É a senha; gere um longo e aleatório com `setup_visper.py`,
+que guarda ele fora do repositório. Nunca algo óbvio tipo "visper" ou
+o seu nome.
+
+Segunda tranca, pro caso da primeira falhar: config.RELAY_BLOCKED_AIS
+barra alvos que este canal não pode abrir mesmo com o tópico certo
+(hoje: claude_code, que abre o Terminal e digita nele — vazar o tópico
+viraria execução de comando, não só "digitar num chat"). E
+config.RELAY_MAX_MESSAGE_CHARS corta mensagem gigante antes dela ser
+colada inteira no chat.
 
 NUNCA TESTADO DE VERDADE ainda — escrito com base na documentação
 pública do ntfy (endpoint /json de streaming), mas o sandbox onde
@@ -30,19 +38,64 @@ import time
 
 import requests
 
+import config
+
 
 class RelayListener:
-    def __init__(self, session, topic: str, server: str = "https://ntfy.sh"):
+    def __init__(
+        self,
+        session,
+        topic: str,
+        server: str = "https://ntfy.sh",
+        blocked_ais=None,
+        max_chars=None,
+    ):
         """
         session: a mesma DictationSession usada pelo áudio local —
                  compartilhar a instância evita dois estados
                  "tô ditando ou não" desencontrados entre mic e ntfy.
         topic: nome do tópico ntfy (ver aviso de segurança acima).
+        blocked_ais: IAs que este canal NÃO pode abrir (ver
+                 config.RELAY_BLOCKED_AIS pro raciocínio — resumindo,
+                 abrir o Terminal remotamente é execução de comando,
+                 não "digitar num chat").
+        max_chars: tamanho máximo de uma mensagem aceita.
         """
         self.session = session
         self.topic = topic
         self.server = server.rstrip("/")
         self.running = False
+        self.blocked_ais = set(
+            config.RELAY_BLOCKED_AIS if blocked_ais is None else blocked_ais
+        )
+        self.max_chars = (
+            config.RELAY_MAX_MESSAGE_CHARS if max_chars is None else max_chars
+        )
+
+    def _handle_message(self, text: str):
+        """
+        Aplica as travas deste canal e entrega pro DictationSession.
+
+        Devolve o mesmo que session.handle() devolveria, ou uma string
+        explicando a recusa. Recusa RETORNA texto em vez de ficar calada
+        de propósito: uma mensagem sumindo sem explicação é
+        indistinguível de "o relay não está funcionando".
+        """
+        if len(text) > self.max_chars:
+            return (
+                f"ignorado: mensagem grande demais "
+                f"({len(text)} caracteres, limite {self.max_chars})"
+            )
+
+        # Só checa quando o texto ABRIRIA uma IA. Com o ditado já
+        # aberto, o texto é conteúdo — não passa pelo roteador, então
+        # não há alvo pra bloquear.
+        if not self.session.dictating and self.blocked_ais:
+            alvo = self.session.router.preview(text)
+            if alvo in self.blocked_ais:
+                return f"ignorado: '{alvo}' não pode ser aberto pelo iPhone"
+
+        return self.session.handle(text)
 
     def listen_forever(self, on_result=None):
         """
@@ -71,23 +124,46 @@ class RelayListener:
                             break
                         if not line:
                             continue  # linha de keepalive do ntfy, ignora
-                        event = json.loads(line)
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            # Uma linha malformada (glitch de rede,
+                            # proxy que injetou algo) é ruído de UMA
+                            # mensagem — não é motivo pra derrubar uma
+                            # conexão que está funcionando e esperar o
+                            # backoff inteiro. Pula a linha e segue
+                            # ouvindo.
+                            continue
                         if event.get("event") != "message":
                             continue  # ignora "open"/keepalive, só processa mensagem
                         text = event.get("message", "")
                         if not text:
                             continue
-                        result = self.session.handle(text)
+                        result = self._handle_message(text)
                         if result and on_result:
                             on_result(result)
-            except (requests.RequestException, json.JSONDecodeError):
-                # rede caiu ou o Mac saiu de suspensão — espera um
-                # pouco e tenta reconectar, sem derrubar a thread.
-                # Backoff exponencial (5s, 10s, 20s... até 60s) em vez
-                # de fixo: recupera rápido de uma falha rápida, mas
-                # não fica martelando o servidor numa queda longa.
-                time.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
+            except requests.RequestException:
+                # rede caiu ou o Mac saiu de suspensão — cai no mesmo
+                # backoff do fim do loop, sem derrubar a thread.
+                pass
+
+            # Espera ANTES de reconectar, tenha a conexão morrido com
+            # erro ou terminado limpa. O caso "terminou limpa" (ntfy
+            # reiniciou, proxy fechou o stream por ociosidade) não
+            # levanta exceção nenhuma: antes ele caía direto no próximo
+            # `while`, reabrindo a conexão na hora, sem pausa — se o
+            # servidor estivesse aceitando e fechando na sequência,
+            # isso virava um laço de requisições HTTPS sem freio, à
+            # toda velocidade, contra o ntfy.sh.
+            #
+            # Backoff exponencial (5s, 10s, 20s... até 60s) em vez de
+            # fixo: recupera rápido de uma falha rápida, mas não fica
+            # martelando o servidor numa queda longa. Reseta assim que
+            # uma conexão dá certo de novo (acima).
+            if not self.running:
+                break
+            time.sleep(backoff_seconds)
+            backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
 
     def stop(self):
         self.running = False

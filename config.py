@@ -1,12 +1,30 @@
 """
-config.py — tudo que você provavelmente vai querer ajustar sem mexer
-no resto do código: a palavra de ativação, qual IA abre por padrão,
-os apelidos de cada IA (em quantos idiomas quiser), e as frases que
-sinalizam "terminei/próximo".
+config.py — os PADRÕES de tudo que você provavelmente vai querer
+ajustar: a palavra de ativação, qual IA abre por padrão, os apelidos
+de cada IA (em quantos idiomas quiser), e as frases que sinalizam
+"terminei/próximo".
 
-Edite essas listas à vontade — não precisa reiniciar nada além de
-rodar o app de novo.
+═══════════════════════════════════════════════════════════════════
+NÃO COLOQUE NADA PESSOAL AQUI. Este arquivo é VERSIONADO num
+repositório PÚBLICO — o que você escrever nele pode acabar publicado
+num `git push`. Isso vale especialmente pro tópico do ntfy e pra
+chave do Porcupine (ver os comentários deles lá embaixo).
+
+Sua configuração pessoal mora fora do repositório, em:
+    ~/Library/Application Support/vIsper/settings.json
+
+A forma mais fácil de criar esse arquivo é rodar:
+    python3 setup_visper.py
+
+O que estiver lá sobrepõe o que está aqui (ver user_settings.py, e a
+chamada de apply_overrides() no fim deste arquivo). Vantagem além da
+segurança: atualizar o vIsper (`git pull`) nunca dá conflito com o
+que você configurou, e dá pra mandar o vIsper pra outra pessoa sem
+mandar junto a sua configuração.
+═══════════════════════════════════════════════════════════════════
 """
+
+from user_settings import apply_overrides
 
 # Palavra (ou frase curta) que ativa o vIsper. Se ela for uma palavra
 # inventada (tipo "vIsper" mesmo), o reconhecimento por Whisper pode
@@ -46,20 +64,68 @@ CLOSE_TRIGGERS = ["câmbio", "over"]
 # comando pro Mac de qualquer lugar (não só na mesma Wi-Fi) — ver
 # relay_listener.py.
 #
-# ATENÇÃO — SEGURANÇA: tópicos do ntfy.sh não têm senha por padrão.
-# Qualquer um que adivinhar esse nome pode mandar comando de verdade
-# pro seu Mac (abrir apps, colar texto, apertar Enter). Troque o
-# placeholder abaixo por uma string longa e aleatória — por exemplo,
-# rode isto no terminal e cole o resultado:
-#   python3 -c "import secrets; print('visper-' + secrets.token_urlsafe(24))"
-# Deixe em branco ("") pra desligar o relay e usar só o mic local.
+# ATENÇÃO — SEGURANÇA, e aqui é a sério: tópicos do ntfy.sh não têm
+# senha. O NOME do tópico é a única coisa que impede qualquer pessoa
+# do mundo de mandar comando de verdade pro seu Mac (abrir apps, colar
+# texto, apertar Enter). Ou seja: é uma senha.
+#
+# Por isso ele NÃO se configura aqui — este arquivo vai pro GitHub.
+# Rode `python3 setup_visper.py`, que sorteia um tópico aleatório e
+# guarda em ~/Library/Application Support/vIsper/settings.json, fora
+# do repositório.
+#
+# Deixe em branco ("") pra manter o relay desligado e usar só o mic
+# local. Se algum dia você desconfiar que o tópico vazou, rode o
+# setup_visper.py de novo pra sortear outro — é instantâneo, e o
+# antigo deixa de valer.
 NTFY_TOPIC = ""
+
+# Tolerância a erro de transcrição na ABERTURA de comando (wake word e
+# nome da IA). O Whisper erra a grafia de palavra inventada com
+# frequência — "vIsper" vira "whisper"/"vesper", "claude" falado em
+# português vira "cloud"/"clode" — e antes disso cada erro desses fazia
+# o comando falhar CALADO, como se o app fosse surdo.
+#
+# 0.72 foi MEDIDO, não chutado: pega todas as variantes reais
+# ("whisper" 0.77, "cloud" 0.73, "claudio" 0.77) e rejeita as palavras
+# de ditado mais parecidas ("dispersar" 0.67, "sempre" 0.50). Suba pra
+# 1.0 pra exigir casamento exato (desliga a tolerância); desça com
+# cuidado — abaixo de ~0.70 palavras comuns começam a colar.
+#
+# Só vale pra ABRIR. O FECHAMENTO ("câmbio"/"over"/wake word durante o
+# ditado) é sempre exato: fechar por engano manda a mensagem pela
+# metade, que é destrutivo; abrir por engano só abre uma aba à toa.
+FUZZY_MATCH_THRESHOLD = 0.72
+
+# IAs que o relay do iPhone NÃO pode abrir, mesmo com o tópico certo.
+#
+# Por que isso existe: abrir "claude_code" roda um AppleScript que abre
+# o Terminal e DIGITA dentro dele. Pelo microfone local isso é ótimo —
+# você está na frente da máquina. Vindo do ntfy é outra coisa: quem
+# souber o tópico deixa de "conseguir digitar num chat de IA" e passa a
+# "conseguir digitar num terminal", que é execução de comando. A
+# diferença de gravidade entre as duas é grande demais pra deixar as
+# duas no mesmo balde.
+#
+# Isso não substitui manter o tópico secreto — é a segunda tranca, pro
+# caso da primeira falhar. Esvazie a lista ([]) se quiser mesmo poder
+# abrir o Terminal pelo iPhone.
+RELAY_BLOCKED_AIS = ["claude_code"]
+
+# Tamanho máximo (caracteres) de uma mensagem vinda do relay. Uma
+# mensagem gigante seria colada inteira no chat da IA; o ntfy aceita
+# corpos bem maiores do que qualquer ditado real precisa.
+RELAY_MAX_MESSAGE_CHARS = 4000
 
 # Motor de wake-word de verdade (opcional) — reconhece o SOM da
 # palavra em vez de procurar ela numa transcrição escrita. Ver
 # wake_word_porcupine.py e o passo a passo no README pra conseguir
 # esses dois valores. Deixe os dois em branco pra continuar no modo
 # atual (Whisper contínuo).
+#
+# A AccessKey é credencial da SUA conta na Picovoice — mesma regra do
+# NTFY_TOPIC acima: configure pelo `python3 setup_visper.py`, não aqui,
+# senão ela vai parar no GitHub.
 PORCUPINE_ACCESS_KEY = ""
 PORCUPINE_KEYWORD_PATH = ""
 
@@ -107,3 +173,43 @@ PREFERRED_INPUT_DEVICES = [
 DICTATION_SOUNDS_ENABLED = True
 DICTATION_OPEN_SOUND = "Pop"    # toca quando o ditado ABRE (IA lançada, começou a ouvir)
 DICTATION_SEND_SOUND = "Glass"  # toca quando o ditado FECHA com conteúdo (colou + apertou Enter)
+
+
+def transcription_hotwords() -> str:
+    """
+    O vocabulário de comando inteiro, numa string só, pro transcritor
+    PRIORIZAR essas palavras na hora de decidir o que ouviu — parâmetro
+    `hotwords` do faster-whisper (existe na 1.0.3 do requirements.txt;
+    conferido no fonte da wheel baixada da PyPI, não de memória).
+
+    É a outra metade da melhoria de detecção, complementar ao
+    FUZZY_MATCH_THRESHOLD acima: o fuzzy conserta a grafia DEPOIS que o
+    Whisper errou; isto faz o Whisper errar MENOS — com "vIsper" na
+    lista de prioridade, a chance de ele escrever "whisper" cai.
+
+    É função (não constante) de propósito: lê os valores FINAIS, já com
+    o settings.json aplicado — quem trocar a wake word ganha a
+    priorização da palavra nova sem mexer em nada.
+    """
+    words = [WAKE_WORD]
+    for triggers in AI_TRIGGERS.values():
+        words.extend(triggers)
+    words.extend(CLOSE_TRIGGERS)
+    # dict.fromkeys: dedup preservando a ordem (wake word primeiro).
+    return ", ".join(dict.fromkeys(w for w in words if w))
+
+
+# ---------------------------------------------------------------------
+# Sobreposição pela configuração PESSOAL — precisa ser a última linha
+# do arquivo, senão sobrepõe valores que ainda nem foram definidos.
+#
+# Tudo acima é PADRÃO; o que estiver em
+# ~/Library/Application Support/vIsper/settings.json ganha. Arquivo
+# faltando ou quebrado não faz nada acontecer (fica só no padrão) —
+# ver user_settings.py pro raciocínio completo.
+#
+# OVERRIDDEN_KEYS é só informativo: o doctor.py mostra essa lista, o
+# que transforma "meu tópico não funciona" em "ah, ele nem estava
+# sendo lido".
+# ---------------------------------------------------------------------
+OVERRIDDEN_KEYS = apply_overrides(globals())

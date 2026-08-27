@@ -73,6 +73,11 @@ def watch_folder(folder, model, session, language=None, on_result=None, poll_sec
             if f.is_file() and is_supported_audio_file(f) and f not in seen:
                 seen.add(f)
                 result = transcribe_and_handle(f, model, session, language=language)
-                if on_result:
+                # `handle()` devolve None quando o texto não virou ação
+                # nenhuma (áudio sem a wake word, com o ditado
+                # fechado). Notificar isso mostraria uma notificação
+                # vazia — todo o resto do app (main.py, relay_listener)
+                # já filtra por resultado verdadeiro antes de avisar.
+                if on_result and result:
                     on_result(result)
         time.sleep(poll_seconds)

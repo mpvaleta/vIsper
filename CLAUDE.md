@@ -52,10 +52,44 @@ não bug daqui).
   pesquisa: nenhum produto de chat de IA aceita áudio bruto direto
   via API/web, sempre precisa transcrever pra texto primeiro — o que
   o pipeline Whisper já faz de qualquer forma.
-- Prioridade de correspondência de trigger de IA: o apelido mais
-  longo primeiro (`command_router.py`) — evita "claude" casar como
-  substring de "claude code" antes de "claude code" ter a chance de
-  ganhar. Já foi um bug real, corrigido.
+- Prioridade de correspondência de trigger de IA: ganha o apelido que
+  aparece PRIMEIRO na fala; empate na mesma posição vai pro mais
+  COMPRIDO (`command_router.py`). As duas metades da regra vêm de bugs
+  reais, corrigidos: o desempate por comprimento evita "claude" casar
+  como substring de "claude code" antes de "claude code" ter chance de
+  ganhar; e ordenar por POSIÇÃO antes disso evita o inverso — quando
+  era só "o mais comprido primeiro", qualquer frase que citasse uma
+  segunda IA depois abria a errada ("vIsper claude e não o perplexity"
+  abria o Perplexity, porque 10 letras ganhavam de 6, e ainda jogava
+  fora a fala inteira junto).
+- **Detecção tolerante a erro de transcrição SÓ na abertura; o
+  fechamento é sempre exato.** Motivo da assimetria: falso positivo ao
+  ABRIR abre uma aba à toa (chato, recuperável); falso positivo ao
+  FECHAR manda a mensagem pela metade (destrutivo). E falso NEGATIVO ao
+  abrir era o pior problema real do app — "vIsper" é palavra inventada,
+  o Whisper transcreve "whisper"/"vesper", "claude" falado em PT vira
+  "cloud"/"clode", e cada erro desses fazia o comando falhar CALADO (o
+  app parecia surdo). Duas camadas, complementares:
+  (1) `hotwords` do faster-whisper (`config.transcription_hotwords()`,
+  usado em `main._listen_loop_whisper`) — o vocabulário de comando
+  entra como prioridade na decodificação, o erro acontece MENOS; o
+  parâmetro foi conferido no fonte da wheel 1.0.3 pinada, não de
+  memória. (2) casamento aproximado (`text_utils.find_trigger_span`,
+  `difflib`, limiar `config.FUZZY_MATCH_THRESHOLD = 0.72`) — MEDIDO,
+  não chutado: pega "whisper"(0.77)/"vesper"(0.83)/"cloud"(0.73)/
+  "claudio"(0.77) e rejeita as palavras de ditado mais próximas
+  ("dispersar" 0.67, "sempre" 0.50). Duas regras que mantêm isso
+  seguro e que NÃO podem ser relaxadas sem repensar tudo: (a) gatilho
+  de VÁRIAS palavras casa palavra-a-palavra pelo ELO MAIS FRACO — a
+  primeira versão comparava a janela emendada e "claude não esqueça"
+  virava "claude code" com 0.76, porque o "claude" compartilhado
+  dominava a conta; (b) wake word (mesmo aproximada) + conteúdo depois
+  mas NENHUM nome de IA continua dando None — é o que impede "véspera"
+  no meio de conversa ambiente de disparar qualquer coisa. Palavras
+  com menos de 4 letras nunca casam por aproximação. difflib (stdlib)
+  em vez de rapidfuzz de propósito: são ~10 palavras curtas por chunk,
+  performance é irrelevante, e uma dependência nativa nova arriscaria
+  o build do .app que acabou de ficar verde.
 - **iPhone precisa ser um app separado que aciona o Mac, não que
   repete a automação sozinho** — iOS não deixa um app simular teclado
   dentro de outro app (sandbox). Não existe "AppleScript do iOS".
@@ -132,6 +166,85 @@ não bug daqui).
   também dobra acento (câmbio/cambio contam igual), pra tolerar o
   Whisper transcrever com ou sem acento.
 
+- **Configuração pessoal mora FORA do repositório**
+  (`user_settings.py` → `~/Library/Application Support/vIsper/settings.json`).
+  O repo é PÚBLICO e o `NTFY_TOPIC` é, na prática, a senha que impede
+  qualquer pessoa do mundo de disparar automação real no Mac dela. O
+  README antigo mandava colar isso no `config.py`, que é versionado —
+  um `git push` distraído publicaria a chave da casa. Hoje `config.py`
+  só tem PADRÕES e documenta cada opção; `apply_overrides(globals())`
+  na ÚLTIMA linha sobrepõe o que houver no settings.json, então nenhum
+  outro módulo precisou mudar (quem faz `from config import X` recebe o
+  valor final sem saber que houve sobreposição). Valor com tipo errado
+  é descartado SOZINHO, sem levar o arquivo junto; arquivo quebrado
+  nunca derruba o app (num `.app` não há Terminal pra mostrar o erro).
+  `check_no_secrets.py` roda no CI e falha se algum segredo voltar pro
+  `config.py`. Efeito colateral que resolve o pedido de distribuir pra
+  outras pessoas: cada uma tem a sua config, e `git pull` nunca
+  conflita com ela.
+- **O ícone da barra de menu É o estado** (`main.STATE_GLYPHS`:
+  ⏳ carregando, 🎙 parado, 🟢 escutando, 🔴 ditando, 🔵 mandou,
+  🟠 erro). Antes o título era fixo e o único retorno era notificação,
+  que some sozinha em segundos — não dava pra responder a pergunta mais
+  básica ("ele está me ouvindo agora?") sem falar uma frase de teste e
+  torcer. As cores são as MESMAS da paleta semântica do
+  `design/layouts_mockup.html`. Bolinha colorida em vez de imagem
+  template porque lê bem no tamanho da barra, funciona igual em modo
+  claro/escuro, e não vira mais um arquivo pro py2app empacotar.
+- **O modelo do Whisper carrega em THREAD, nunca no `__init__`.**
+  São ~150 MB baixados na primeira execução: no `__init__` o app ficava
+  minutos sem ícone nenhum, e qualquer falha matava o processo ANTES do
+  ícone existir. Regra geral que vale pra qualquer coisa nova no
+  `__init__`: **nada que possa demorar ou levantar exceção pode rodar
+  antes do ícone aparecer** — sem Terminal, um app que morre ali não
+  deixa rastro em lugar nenhum.
+- **Fallback pro microfone padrão do sistema**
+  (`audio_input.default_input_device()`). `guess_preferred_device()` só
+  conhece DJI e Sony; sem nenhum dos dois plugado ela devolvia None e
+  "Start listening" só mostrava um alerta — quem abrisse o app sem o
+  mic específico concluiria que ele não funciona, com o microfone do
+  MacBook ali o tempo todo.
+- **O relay do iPhone não pode abrir `claude_code`**
+  (`config.RELAY_BLOCKED_AIS`). Abrir o Claude Code roda um AppleScript
+  que abre o Terminal e DIGITA nele. Pelo mic local isso é ótimo (você
+  está na frente da máquina); vindo do ntfy, vazar o tópico deixa de
+  ser "conseguir digitar num chat" e vira execução de comando. A
+  checagem usa `CommandRouter.preview()`, que reusa o MESMO `_decide()`
+  de `route()` — um filtro com lógica paralela divergiria do roteador e
+  acabaria liberando justamente o que deveria barrar.
+- **`rumps.notification()` nunca é chamado direto — sempre por
+  `main.notify()`.** Ele exige bundle com identificador e levanta
+  `RuntimeError` rodando por `python3 main.py`, que é exatamente como o
+  primeiro teste acontece. Chamado de dentro do loop de ditado, isso
+  derrubava a thread de escuta inteira: o app parava de funcionar por
+  causa do MECANISMO DE AVISO, não do que ele avisa.
+- **`vad_filter=True` na transcrição.** Sem ele o Whisper ALUCINA em
+  cima de silêncio (costuma devolver "Legendas pela comunidade
+  Amara.org" e afins, resquício do treino em vídeo legendado). Num app
+  que escuta o tempo todo isso não é detalhe: texto inventado entra no
+  ditado como fala real, e uma alucinação que contenha a wake word ou
+  "over" dispara ação sozinha.
+- **O DMG é compilado pelo GitHub Actions num macOS de verdade**, não
+  na máquina dela. Sem isso, ter o DMG exigia venv + pip + Homebrew
+  funcionando primeiro — exatamente o atrito que o app deveria
+  eliminar. Runner macOS é grátis e ilimitado em repo público. Efeito
+  colateral igualmente importante: é o primeiro lugar onde o
+  empacotamento roda num macOS real, e o smoke test (abre o bundle,
+  confere que sobrevive 20s) pega justamente a falha silenciosa do
+  py2app quando falta lib nativa.
+- **O app de iPhone é um PWA no GitHub Pages (`docs/`), não Swift.**
+  iOS não instala app de arquivo; com conta grátis de desenvolvedor o
+  app EXPIRA EM 7 DIAS, com conta paga são US$99/ano — as duas
+  contrariam custo zero. O PWA vira ícone na tela de início pelo
+  "Adicionar à Tela de Início", não expira, e é testado num Chromium de
+  verdade a cada push (`test_pwa.js`), o que faz dele a peça MAIS
+  validada do projeto. **Armadilha do iOS que já mordeu**: o app da
+  tela de início tem armazenamento SEPARADO do Safari — o que atravessa
+  é a URL do atalho, então o fragmento `#t=<tópico>` só pode ser
+  apagado DEPOIS de já estar rodando em modo standalone, e o manifest
+  não pode definir `start_url` (com ele o iOS guardaria a URL do
+  manifest e jogaria o hash fora do mesmo jeito).
+
 ## Estado atual do código
 
 Todo o código Python foi escrito e testado neste ambiente (sandbox
@@ -157,7 +270,13 @@ Módulos principais (mic local, sempre ativos):
     comparado contra outro gatilho depois. Apara pontuação nas bordas
     (não só espaço) — sem isso, "vIsper." (Whisper adiciona ponto
     final com frequência) não abria a IA padrão, porque "." sobrava
-    como se fosse conteúdo depois da wake word.
+    como se fosse conteúdo depois da wake word. Essa aparagem é por
+    CATEGORIA Unicode (`_is_edge_char()`), não por uma lista fixa de
+    caracteres ASCII: era `string.whitespace + string.punctuation`, e
+    aí "vIsper—" (o Whisper transcreve travessão, reticências e aspas
+    curvas de verdade) deixava "—" sobrando como conteúdo e a wake
+    word sozinha simplesmente não abria a IA padrão — o mesmo bug do
+    caso "vIsper.", só que pra pontuação não-ASCII.
   - `split_before_any()`/`text_after_word()` — resultado PODE virar
     conteúdo real colado no chat, então preservam capitalização/
     acento/pontuação REAL do original (ao contrário da família
@@ -169,7 +288,19 @@ Módulos principais (mic local, sempre ativos):
     assimetria de propósito: apara pontuação da borda ESQUERDA (logo
     depois da palavra-gatilho, tipo "claude," — sempre artefato de
     como a palavra foi dita) mas só espaço da borda DIREITA (pode ser
-    fim de frase real, tipo "...tempo hoje?"). 27 testes.
+    fim de frase real, tipo "...tempo hoje?").
+    **Cuidado que mordeu de novo, e pior**: essas duas acham o gatilho
+    no texto DOBRADO (minúsculo/sem acento) e fatiam o texto ORIGINAL
+    com esse índice. Isso pressupunha que dobrar preserva o
+    comprimento — e não preserva: `fold_accents()` usa NFKD, que é
+    decomposição de COMPATIBILIDADE, então "…" vira "..." (+2) e
+    ligaduras tipo "ﬁ" viram "fi" (+1). O resultado era texto
+    corrompido colado direto no chat da IA ("Bom dia… over" virava
+    "Bom dia… ov"; "vIsper… claude qual é..." virava "ual é..."). Hoje
+    `_fold_with_index_map()` guarda, pra cada caractere do texto
+    dobrado, de qual posição do original ele veio — **qualquer função
+    nova que ache posição no dobrado e fatie o original TEM que usar
+    esse mapa**. 35 testes.
 - `audio_input.py` — lista/detecta microfones (`guess_preferred_device()`,
   `classify_device()`, orientados por `config.PREFERRED_INPUT_DEVICES` —
   casamento por SUBSTRING simples, não palavra inteira, porque nome de
@@ -207,7 +338,10 @@ Módulos principais (mic local, sempre ativos):
   esse contrato (de string solta pra tupla) exigiu atualizar os 7
   testes já existentes — mecânico, mas intencional: quem chamar
   `route()` de algum lugar novo precisa desempacotar a tupla, não
-  tratar o retorno como string. 11 testes dedicados.
+  tratar o retorno como string. A escolha da IA é por POSIÇÃO do
+  apelido na fala (mais cedo ganha), com desempate por comprimento —
+  ver o raciocínio e o bug que motivou cada metade em "Decisões de
+  arquitetura". 13 testes dedicados.
 - `dictation.py` — a máquina de estados ocioso/ditando. Fecha com a
   wake word OU qualquer `CLOSE_TRIGGERS`. A mensagem final é o BUFFER
   INTERNO (populado por chamadas anteriores de `.handle()`) **mais**
@@ -217,14 +351,21 @@ Módulos principais (mic local, sempre ativos):
   abriu (`command_router.route()`'s `leftover`) — as duas pontas
   corrigidas depois que testes concretos mostraram que "terminar/
   começar a frase colado com o gatilho, sem pausa" descartava conteúdo
-  de verdade em qualquer uma das duas. Ao integrar qualquer fonte de
-  áudio nova, o que importa lembrar agora é que o texto da chamada que
-  ABRE e o texto da chamada que FECHA podem os dois ter conteúdo real
-  misturado com o gatilho, não só as chamadas do meio. `DictationSession`
-  aceita `on_open`/`on_send` opcionais (callbacks sem argumento, só
-  feedback — não afetam a máquina de estados; `on_send` NÃO dispara no
-  caso "cancelado"), usados por `main.py` pra tocar o earcon. 19
-  testes dedicados.
+  de verdade em qualquer uma das duas. E o MESMO trecho pode abrir e
+  fechar de uma vez ("vIsper claude qual é a previsão do tempo over",
+  o pedido inteiro numa respiração só — o jeito mais natural de usar
+  isso): o `leftover` da abertura passa pela mesma checagem de
+  fechamento, senão o "over" ia pro buffer como se fosse conteúdo, o
+  ditado ficava aberto pra sempre esperando um fechamento que já tinha
+  sido dito, e a palavra "over" acabava colada no texto mandado pra
+  IA. Ao integrar qualquer fonte de áudio nova, o que importa lembrar
+  agora é que o texto da chamada que ABRE e o texto da chamada que
+  FECHA podem os dois ter conteúdo real misturado com o gatilho — e
+  podem até ser a MESMA chamada —, não só as chamadas do meio.
+  `DictationSession` aceita `on_open`/`on_send` opcionais (callbacks
+  sem argumento, só feedback — não afetam a máquina de estados;
+  `on_send` NÃO dispara no caso "cancelado"), usados por `main.py` pra
+  tocar o earcon. 22 testes dedicados.
 - `actions.py` — as ações de verdade (abrir app/URL, colar texto,
   apertar Enter) via `subprocess`/`osascript`. Todo `subprocess.run()`
   usa `check=True` — antes, uma falha (ex.: permissão de
@@ -252,10 +393,26 @@ Módulos principais (mic local, sempre ativos):
   do submenu compara por NOME, não
   índice — importante pra mostrar certo logo no primeiro
   `_rebuild_mic_menu()` do `__init__`, antes de qualquer índice ter
-  sido resolvido de verdade. Thread de escuta envolvida em try/except
-  (`_listen_loop_safe`) — sem isso, stream falhando ao abrir (ex.:
-  fone Bluetooth desconectou) travava `self.listening=True` pra
-  sempre, exigindo reiniciar o app. **A API do rumps usada aqui
+  sido resolvido de verdade. Uma escolha manual RESTAURADA de outra
+  execução é reclassificada pelo nome (`classify_device()`) no
+  `__init__` e em `_resolve_device()` — só o NOME é persistido, então
+  sem isso `device_is_bluetooth` voltava False ao reabrir o app e o
+  aviso de qualidade Bluetooth nunca mais aparecia, justo no caso em
+  que ele é mais útil (fone escolhido de propósito, sessão após
+  sessão). "Iniciar escuta" tem dois guards, não um: `self.listening`
+  E a thread anterior ainda viva — "Parar escuta" só baixa a flag, e a
+  thread antiga pode continuar até `chunk_seconds` dentro de um
+  `stream.read()`; sem o segundo guard, Parar seguido de Iniciar abria
+  uma SEGUNDA thread de escuta, com duas transcrições paralelas
+  alimentando o mesmo `DictationSession`. Thread de escuta envolvida
+  em try/except (`_listen_loop_safe`) — sem isso, stream falhando ao
+  abrir (ex.: fone Bluetooth desconectou) travava `self.listening=True`
+  pra sempre, exigindo reiniciar o app. 12 testes
+  (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
+  `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
+  de dispositivo, os guards de "Iniciar escuta" e o checkmark do
+  submenu; NÃO cobre nada de AppKit/áudio de verdade). **A API do
+  rumps usada aqui
   (`MenuItem.clear()/.add()`, `.state`, `.title` mutável) foi
   conferida linha a linha contra o source real do pacote (baixado da
   PyPI, versão 0.4.0 — a mesma do `requirements.txt`), não escrita de
@@ -268,19 +425,71 @@ Módulos de entrada alternativa (compartilham o mesmo
 "abrir por um arquivo de áudio" nunca ficam em estados diferentes):
 - `relay_listener.py` — escuta o tópico ntfy, alimenta o
   `DictationSession`. Já plugado em `main.py`. Backoff exponencial no
-  reconnect (5s→10s→20s...até 60s, reseta ao reconectar). **Nunca
-  testado contra o ntfy.sh de verdade** — o parsing foi conferido
-  contra a documentação oficial do formato JSON deles, mas não contra
-  uma conexão real.
+  reconnect (5s→10s→20s...até 60s, reseta ao reconectar) — aplicado a
+  TODA reconexão, não só às que morreram com exceção: um stream que
+  acaba limpo (ntfy reiniciou, proxy fechou por ociosidade) não
+  levanta erro nenhum e antes caía direto no próximo `while`,
+  reabrindo na hora, sem pausa — um servidor que aceitasse e fechasse
+  na sequência virava um laço de requisições HTTPS a toda velocidade
+  contra o ntfy.sh. Linha de JSON malformada pula só aquela linha, em
+  vez de derrubar uma conexão que está funcionando. **Nunca testado
+  contra o ntfy.sh de verdade** — o parsing foi conferido contra a
+  documentação oficial do formato JSON deles, mas não contra uma
+  conexão real.
 - `wake_word_porcupine.py` — wrapper do motor Porcupine. Escrito
   contra a API real do pacote `pvporcupine` (conferida, não foi de
   memória). Não dá pra testar detecção de verdade sem AccessKey +
   arquivo `.ppn` reais.
 - `porcupine_session.py` — a orquestração ocioso/ditando descrita
-  acima. Já ligado em `main.py`.
+  acima. Já ligado em `main.py`. O fechamento entrega tudo numa
+  chamada só a `DictationSession.handle()`, com a wake word emendada
+  no fim do conteúdo transcrito. Isso já foram DUAS chamadas
+  (conteúdo, depois wake word sozinha) e era um bug sério: o áudio da
+  wake word de fechamento está DENTRO do buffer de ditado (o frame que
+  dispara a detecção entra no buffer antes de ser processado), então o
+  Whisper normalmente transcreve ela junto — a primeira chamada já
+  fechava o ditado e a segunda caía numa sessão OCIOSA, onde wake word
+  sozinha quer dizer "abre a IA padrão". Resultado: cada envio abria
+  uma aba nova do Claude e deixava o app preso em modo ditado de novo.
 - `audio_file_input.py` — transcreve um arquivo de áudio (voice notes
   etc.) ou vigia uma pasta. **Ainda não plugado em `main.py`** — sem
   menu nem forma de escolher a pasta ainda.
+
+Configuração e distribuição (o que mudou o jeito de instalar):
+- `user_settings.py` — a sobreposição pessoal descrita nas decisões
+  acima. `load_settings()`/`save_settings()`/`apply_overrides()`, com um
+  validador por chave (`VALIDATORS`). Valor inválido cai SOZINHO, sem
+  levar o arquivo junto. `settings_path()` respeita a env var
+  `VISPER_SETTINGS_PATH`, que é como os testes nunca tocam no arquivo
+  real. 21 testes.
+- `setup_visper.py` — assistente de primeira configuração. Só
+  biblioteca padrão de propósito: a primeira coisa que a pessoa faz é
+  ANTES de instalar qualquer dependência. Sorteia o tópico, e no fim
+  imprime (e copia com `pbcopy`) o link do iPhone com o tópico no
+  FRAGMENTO da URL — que navegador nenhum manda pro servidor, então
+  não aparece em log do GitHub Pages.
+- `check_no_secrets.py` — roda no CI e falha se `NTFY_TOPIC` ou
+  `PORCUPINE_ACCESS_KEY` voltarem a ter valor no `config.py`
+  versionado, ou se um `settings.json`/`device.json` for commitado. Lê
+  o `config.py` como TEXTO (ast), não importando ele — senão o valor
+  real vindo do settings.json seria confundido com o que está escrito
+  no arquivo.
+- `docs/` — o app de iPhone (PWA) publicado no GitHub Pages.
+  `index.html` é autocontido; guarda tópico/wake word/IA escolhida em
+  `localStorage`; monta `"<wake> <ia> <texto> over"` numa string só,
+  caindo no caminho abre-e-fecha-no-mesmo-trecho de `dictation.py`.
+  Envio automático com 3s de janela pra cancelar (transcrição erra;
+  mandar errado é pior que um toque a mais). Corpo de texto puro no
+  POST de propósito — requisição simples, sem preflight CORS.
+- `test_pwa.js` — 25 testes do PWA num Chromium DE VERDADE
+  (Playwright), rodando no CI. **A peça mais validada do projeto** — a
+  única testada em runtime real em vez de mocks. Achou dois defeitos
+  visuais que nenhuma leitura de código teria pego: o `hidden` não
+  esconde SVG (a regra do navegador só vale pro namespace HTML), e o
+  `viewBox` do mascote incluía a moldura inteira.
+- `.github/workflows/` — `tests.yml` (suíte Python + PWA + o guarda de
+  segredos), `build-macos.yml` (o `.app`/`.dmg` num macOS real, com
+  smoke test), `pages.yml` (publica o PWA).
 
 Ferramentas de apoio:
 - `doctor.py` — confere a config antes de rodar (dependências
@@ -291,7 +500,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 124 testes no total. Rodar com:
+- `test_*.py` — 244 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -333,6 +542,58 @@ de verdade carregou isso ainda; primeira coisa a conferir é se o
 ícone aparece na barra de menu depois do login, e os logs
 (`visper.out.log`/`visper.err.log`, na pasta do vIsper) se não
 aparecer.
+
+Empacotamento (`setup.py` + `build_mac_app.sh`) — transforma o código
+Python num `vIsper.app` de duplo clique e monta um `vIsper.dmg` em
+volta. Motivo de existir: a Valeta pediu explicitamente "um dmg e um
+app pra instalar", depois de tropeçar justamente no atrito de
+`cd` + `source venv/bin/activate` + `pip install` (ver "Preferências":
+mínimo de atrito é critério de arquitetura aqui). Decisões tomadas:
+- **py2app, não PyInstaller** — py2app é o que gera bundle `.app`
+  nativo de barra de menu com `Info.plist` de verdade, que é
+  exatamente do que o rumps precisa.
+- **`LSUIElement = True`** — sem isso o app apareceria no Dock e no
+  Cmd+Tab; é um app de barra de menu, não deve.
+- **`NSMicrophoneUsageDescription` e `NSAppleEventsUsageDescription`
+  são obrigatórias, não opcionais** — rodando por Terminal quem pedia
+  permissão era o Terminal; num `.app` é o próprio app, e sem essas
+  chaves o macOS moderno MATA o processo em vez de mostrar o diálogo.
+  Texto delas em inglês de propósito (aparece na UI do sistema).
+- **`argv_emulation` PRECISA ser False** — depende do Carbon, que não
+  existe mais em 64-bit; travaria o app na abertura.
+- **Assinatura ad-hoc (`codesign -s -`), não conta paga da Apple** —
+  US$99/ano contraria o custo zero. O ad-hoc não tira o aviso do
+  Gatekeeper (primeira abertura ainda precisa de botão direito →
+  Abrir), mas dá ao app uma identidade ESTÁVEL, e isso importa porque
+  o macOS amarra permissão concedida (mic/Acessibilidade) à
+  assinatura — sem ele, toda recompilação pediria tudo de novo.
+- **Dois modos de build**: standalone (padrão, autocontido, centenas
+  de MB por causa do ctranslate2/onnxruntime que o faster-whisper
+  puxa) e `--dev` (alias, segundos, mas o `.app` vira atalho pro venv
+  desta pasta e quebra se ela sair do lugar). O `--dev` é o plano B
+  documentado caso o standalone brigue com as libs nativas.
+- **Ícone gerado no build, não versionado** — `sips`+`iconutil` fazem
+  o `.icns` a partir de `design/mascot_concept_v1_preview.png` (400px,
+  então 512/1024 são upscale e ficam macios — aceito porque o mascote
+  ainda é conceito não aprovado). Trocar a arte é trocar o PNG.
+**NUNCA RODOU NUM MAC** — só validação de sintaxe (`bash -n`,
+`py_compile`). É a peça menos validada junto com o LaunchAgent.
+
+iOS via app Atalhos (`ios/ATALHO_IPHONE.md`) — receita passo a passo
+pra montar no app Atalhos (que já vem no iPhone) o mesmo POST no
+tópico ntfy que o rascunho Swift faria. **Passou a ser o caminho
+recomendado, e o Swift virou "avançado"**: iOS não instala app de
+arquivo (não existe DMG de iPhone) — ou App Store, ou Xcode + conta;
+com conta grátis o app EXPIRA EM 7 DIAS, com conta paga são US$99/ano.
+As duas alternativas contrariam custo zero/mínimo atrito, e o Atalho
+não custa nada, não expira, e já roda na Siri/Botão de Ação/Apple
+Watch de graça (o Watch era uma das "ideias ainda não construídas" —
+sai junto sem trabalho extra). Detalhe da receita que importa: o
+Atalho monta `vIsper <ditado> over` numa string só, então ela cai
+exatamente no caminho "abre e fecha no MESMO trecho" de
+`dictation.py` — o que aquele bug de uma-respiração-só corrigiu é o
+que faz o iPhone funcionar em um disparo. Não testado (sem iPhone
+aqui).
 
 Design (`design/`):
 - `mascot_concept_v1.svg` — mascote colorido (lavanda), com preview
@@ -384,6 +645,43 @@ mudar bastante antes de virar assets de produção.
 7. `launchd/com.valeta.visper.plist` (início automático no login)
    nunca foi carregado por um `launchctl` de verdade — só validado
    como XML bem formado (`plistlib`). Ver "Próximos passos" #2.
+8. O app empacotado não é assinado por conta paga da Apple, então a
+   PRIMEIRA abertura exige botão direito → Abrir (Gatekeeper). Não
+   tem como remover isso sem os US$99/ano.
+9. **Ligar o GitHub Pages é um clique manual** (Settings → Pages →
+   Source: GitHub Actions). O token do CI não tem permissão de
+   administrador do repositório, então `configure-pages` com
+   `enablement: true` falha com "Resource not accessible by
+   integration" — confirmado numa execução real. O `pages.yml`
+   degrada com instrução em vez de ficar vermelho pra sempre.
+10. `vad_filter=True` e `hotwords` foram acrescentados só no loop do
+   Whisper contínuo (`main._listen_loop_whisper`).
+   `porcupine_session.py` e `audio_file_input.py` continuam sem os
+   dois — neles o áudio já vem recortado por outra coisa (detecção
+   acústica / arquivo escolhido a dedo), então alucinação de silêncio
+   é bem menos provável e a prioridade de vocabulário importa menos
+   (o Porcupine já detectou a wake word pelo SOM); e mexer neles
+   quebraria os dublês de modelo dos testes, que fixam a assinatura
+   `transcribe(audio, language=None)`.
+11. Chunks de 4s sem sobreposição (`audio_input.AudioStream.chunks()`):
+   uma palavra cortada exatamente na fronteira entre dois chunks pode
+   não casar com nenhum gatilho. Conhecido, não corrigido — a correção
+   (janela deslizante) muda o contrato de todo mundo que consome
+   `chunks()`.
+
+### O que JÁ foi validado em máquina real (não é mais suposição)
+
+Atualizar esta lista sempre que algo sair do "nunca testado":
+
+- **O `.app`/`.dmg` compila e ABRE num macOS de verdade.** O job
+  `build-macos.yml` (runner macos-14, Apple Silicon) passou incluindo o
+  smoke test que abre o bundle e confere que ele sobrevive 20s — que é
+  exatamente a falha silenciosa do py2app quando falta lib nativa.
+  Então: a lista `PACKAGES`, o `user_settings` no bundle, e a cópia do
+  libportaudio estão corretos. O que continua não validado é o
+  comportamento COM microfone e COM permissões concedidas.
+- **O app de iPhone funciona num navegador real** (25 testes,
+  `test_pwa.js`, no CI a cada push).
 
 ## Próximos passos, em ordem de prioridade
 

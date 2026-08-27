@@ -9,7 +9,7 @@ parte).
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import audio_file_input as afi
 
@@ -56,6 +56,29 @@ class AudioFileInputTest(unittest.TestCase):
             self.assertEqual(result, "abriu claude — ouvindo ditado")
         finally:
             Path(path).unlink(missing_ok=True)
+
+    def test_watch_folder_nao_notifica_quando_nao_houve_acao(self):
+        # handle() devolve None quando o texto não virou ação nenhuma
+        # (áudio sem a wake word, com o ditado fechado). watch_folder
+        # chamava on_result(None) mesmo assim — em main.py isso viraria
+        # uma notificação vazia. Todo o resto do app (loop de mic,
+        # relay) já filtra por resultado verdadeiro antes de avisar.
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "nota.m4a").write_bytes(b"")
+            model = MagicMock()
+            model.transcribe.return_value = ([FakeSegment("conversa qualquer")], None)
+            session = MagicMock()
+            session.handle.return_value = None
+            notified = []
+
+            # watch_folder roda pra sempre — deixa uma varredura
+            # acontecer e corta no time.sleep() do fim do ciclo.
+            with patch("audio_file_input.time.sleep", side_effect=StopIteration):
+                with self.assertRaises(StopIteration):
+                    afi.watch_folder(folder, model, session, on_result=notified.append)
+
+            session.handle.assert_called_once_with("conversa qualquer")
+            self.assertEqual(notified, [])
 
 
 if __name__ == "__main__":

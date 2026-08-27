@@ -189,6 +189,43 @@ class DictationSessionTest(unittest.TestCase):
         session.handle("vIsper claude")
         self.assertEqual(session.buffer, [])
 
+    def test_abrir_e_fechar_no_MESMO_trecho_manda_na_hora(self):
+        # Regressão: o pedido inteiro numa respiração só ("vIsper
+        # claude <pergunta> over") é o jeito mais natural de usar isso,
+        # e era o único caso que nenhuma das duas correções anteriores
+        # pegava — elas cuidavam da abertura e do fechamento
+        # separadamente. O "over" ia pro buffer como conteúdo: o
+        # ditado ficava aberto pra sempre esperando um fechamento que
+        # já tinha sido dito, e quando enfim fechasse a palavra "over"
+        # ia colada no texto mandado pra IA.
+        calls = []
+        session = self._build_session(calls)
+        result = session.handle("vIsper claude qual é a previsão do tempo over")
+        self.assertIn("abriu_claude", calls)
+        self.assertFalse(session.dictating, "o 'over' no mesmo trecho tinha que fechar")
+        self.assertIn(("colou", "qual é a previsão do tempo"), calls)
+        self.assertIn("mandou_enter", calls)
+        self.assertIn("abriu claude", result)
+        self.assertIn("mandou:", result)
+
+    def test_abrir_e_fechar_no_mesmo_trecho_toca_os_dois_earcons(self):
+        calls = []
+        session = self._build_session(calls, with_sounds=True)
+        session.handle("vIsper claude manda ver nisso câmbio")
+        self.assertIn("som_abriu", calls)
+        self.assertIn("som_mandou", calls)
+
+    def test_abrir_com_gatilho_de_fechamento_e_nada_mais_nao_manda_vazio(self):
+        # "vIsper claude over" abre e fecha sem conteúdo nenhum — não
+        # pode colar/mandar string vazia, nem tocar o earcon de envio.
+        calls = []
+        session = self._build_session(calls, with_sounds=True)
+        session.handle("vIsper claude over")
+        self.assertFalse(session.dictating)
+        self.assertNotIn("mandou_enter", calls)
+        self.assertNotIn("som_mandou", calls)
+        self.assertEqual([c for c in calls if isinstance(c, tuple)], [])
+
     def test_fechar_so_com_o_gatilho_continua_sem_conteudo(self):
         # Garante que a correção não inventa conteúdo quando não há
         # nada de verdade antes do gatilho (mesmo caso do teste
@@ -204,3 +241,48 @@ class DictationSessionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AberturaToleranteTest(unittest.TestCase):
+    """
+    A tolerância a erro de transcrição vale só pra ABRIR (router);
+    FECHAR continua exato — fechar por engano manda a mensagem pela
+    metade, que é destrutivo, enquanto abrir por engano só abre uma
+    aba à toa. Estes testes fixam a assimetria de propósito.
+    """
+
+    def _build(self, calls):
+        router = CommandRouter({"claude": lambda: calls.append("abriu")})
+        return DictationSession(
+            router=router,
+            paste_action=lambda t: calls.append(("colou", t)),
+            send_action=lambda: calls.append("enter"),
+        )
+
+    def test_respiracao_unica_com_wake_word_transcrita_errada(self):
+        # "whisper claude ... over" numa chamada só: abre pelo fuzzy,
+        # o conteúdo entra, e o "over" (exato) fecha e manda.
+        calls = []
+        session = self._build(calls)
+
+        session.handle("whisper claude me lembra da reunião over")
+
+        self.assertIn("abriu", calls)
+        self.assertIn(("colou", "me lembra da reunião"), calls)
+        self.assertIn("enter", calls)
+        self.assertFalse(session.dictating)
+
+    def test_whisper_durante_o_ditado_e_conteudo_nao_fechamento(self):
+        # Se o fechamento usasse fuzzy, falar a palavra "whisper" no
+        # meio de um ditado (ex.: falando sobre o próprio modelo)
+        # cortaria e mandaria cedo. Tem que virar conteúdo.
+        calls = []
+        session = self._build(calls)
+        session.dictating = True
+
+        resultado = session.handle("o modelo whisper é o que transcreve")
+        self.assertEqual(resultado, "ditando…")
+        self.assertTrue(session.dictating)
+
+        session.handle("over")
+        self.assertIn(("colou", "o modelo whisper é o que transcreve"), calls)

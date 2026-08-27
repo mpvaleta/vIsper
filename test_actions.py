@@ -21,12 +21,16 @@ class OpenActionsTest(unittest.TestCase):
     @patch("actions.subprocess.run")
     def test_open_claude_usa_check_true(self, mock_run):
         actions.open_claude()
-        mock_run.assert_called_once_with(["open", "https://claude.ai/new"], check=True)
+        mock_run.assert_called_once_with(
+            ["open", "https://claude.ai/new"], check=True, capture_output=True
+        )
 
     @patch("actions.subprocess.run")
     def test_open_chatgpt_usa_check_true(self, mock_run):
         actions.open_chatgpt()
-        mock_run.assert_called_once_with(["open", "https://chat.openai.com/"], check=True)
+        mock_run.assert_called_once_with(
+            ["open", "https://chat.openai.com/"], check=True, capture_output=True
+        )
 
     @patch("actions.subprocess.run")
     def test_open_claude_code_usa_osascript_com_check_true(self, mock_run):
@@ -49,7 +53,15 @@ class PasteTextTest(unittest.TestCase):
         actions.paste_text("olá mundo")
         self.assertEqual(mock_run.call_count, 2)
         pbcopy_call, keystroke_call = mock_run.call_args_list
-        self.assertEqual(pbcopy_call, call(["pbcopy"], input="olá mundo".encode("utf-8"), check=True))
+        self.assertEqual(
+            pbcopy_call,
+            call(
+                ["pbcopy"],
+                input="olá mundo".encode("utf-8"),
+                check=True,
+                capture_output=True,
+            ),
+        )
         self.assertTrue(keystroke_call.kwargs.get("check"))
         self.assertIn("v", keystroke_call.args[0][-1])
 
@@ -80,6 +92,70 @@ class HandleDoneTest(unittest.TestCase):
         mock_run.side_effect = subprocess.CalledProcessError(1, ["osascript"])
         with self.assertRaises(subprocess.CalledProcessError):
             actions.handle_done()
+
+
+class PermissaoNegadaTest(unittest.TestCase):
+    """
+    Recusa de PERMISSÃO tem que ser distinguível de qualquer outra
+    falha. É a mais provável na primeira execução (o macOS só pede
+    Acessibilidade/Automação quando o app tenta usar), e a única cuja
+    correção é um caminho fixo de Ajustes do Sistema — misturada com as
+    outras, virava "erro no áudio" e mandava investigar o microfone à
+    toa.
+    """
+
+    def _falha(self, stderr):
+        return subprocess.CalledProcessError(1, ["osascript"], None, stderr)
+
+    @patch("actions.subprocess.run")
+    def test_acesso_assistivo_negado_vira_automation_denied(self, mock_run):
+        mock_run.side_effect = self._falha(
+            b"osascript is not allowed assistive access. (-25211)"
+        )
+        with self.assertRaises(actions.AutomationDenied):
+            actions.handle_done()
+
+    @patch("actions.subprocess.run")
+    def test_apple_events_negado_vira_automation_denied(self, mock_run):
+        mock_run.side_effect = self._falha(
+            b"Not authorized to send Apple events to System Events. (-1743)"
+        )
+        with self.assertRaises(actions.AutomationDenied):
+            actions.paste_text("oi")
+
+    @patch("actions.subprocess.run")
+    def test_reconhece_pelo_codigo_mesmo_com_o_texto_em_outro_idioma(self, mock_run):
+        # O texto em volta muda com o idioma do sistema (o Mac da Valeta
+        # está em português) — só o código numérico é estável.
+        mock_run.side_effect = self._falha(
+            "System Events recebeu um erro: não está autorizado. (-1719)".encode()
+        )
+        with self.assertRaises(actions.AutomationDenied):
+            actions.handle_done()
+
+    @patch("actions.subprocess.run")
+    def test_falha_comum_continua_sendo_called_process_error(self, mock_run):
+        # Erro de script (não de permissão) não pode virar
+        # AutomationDenied, senão a mensagem manda ela mexer em Ajustes
+        # por um problema que não está lá.
+        mock_run.side_effect = self._falha(b"syntax error: expected end of line")
+        with self.assertRaises(subprocess.CalledProcessError):
+            actions.handle_done()
+
+    @patch("actions.subprocess.run")
+    def test_stderr_ausente_nao_quebra_a_checagem(self, mock_run):
+        mock_run.side_effect = subprocess.CalledProcessError(1, ["osascript"])
+        with self.assertRaises(subprocess.CalledProcessError):
+            actions.handle_done()
+
+    @patch("actions.subprocess.run")
+    def test_automation_denied_nao_e_called_process_error(self, mock_run):
+        # main.py captura as duas separadamente, em ordem — se
+        # AutomationDenied herdasse de CalledProcessError, o except
+        # genérico poderia pegar antes dependendo da ordem.
+        self.assertFalse(
+            issubclass(actions.AutomationDenied, subprocess.CalledProcessError)
+        )
 
 
 class PlaySoundTest(unittest.TestCase):
