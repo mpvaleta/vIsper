@@ -1052,6 +1052,22 @@ class HistoricoDeAtividadeTest(unittest.TestCase):
         self.assertTrue(any(longa in l for l in app._history))
         self.assertIn("…", app.heard_item.title)
 
+    def test_linha_comprida_e_encurtada_pelo_meio_nao_pelo_fim(self):
+        # As duas pontas são o diagnóstico: a wake word abre a frase e o
+        # gatilho de fechamento a fecha. Encurtar pelo fim jogaria fora
+        # metade da resposta — e é justamente a metade que explica por
+        # que o ditado não foi mandado.
+        longa = "vIsper claude " + ("palavra " * 40) + "over"
+        curta = main._elide(f"09:41:58  heard  {longa}")
+        self.assertLessEqual(len(curta), main.HISTORY_LINE_MAX)
+        self.assertIn("vIsper claude", curta)
+        self.assertTrue(curta.endswith("over"))
+        self.assertIn("...", curta)
+
+    def test_linha_curta_passa_intacta(self):
+        linha = "09:41:58  heard  vIsper claude"
+        self.assertEqual(main._elide(linha), linha)
+
     def test_a_decisao_entra_junto_com_o_que_foi_ouvido(self):
         # As duas metades importam separadas: a falha mais comum é elas
         # não combinarem (ouviu certo, decidiu errado — ou nem ouviu).
@@ -1077,13 +1093,14 @@ class HistoricoDeAtividadeTest(unittest.TestCase):
         # O app escuta o tempo todo: sem teto, uma sessão longa vira
         # vazamento de memória — e o alerta ficaria alto demais pra ler.
         app = _build_app(load_model=True)
-        for i in range(main.HISTORY_MAX + 25):
+        total = main.HISTORY_MAX + 25
+        for i in range(total):
             app._set_heard(f"trecho {i}")
         self.assertEqual(len(app._history), main.HISTORY_MAX)
         # O que sobra é o RECENTE, não o começo: a pergunta é sempre
         # sobre o que acabou de acontecer.
-        self.assertTrue(any("trecho 64" in l for l in app._history))
-        self.assertFalse(any("trecho 0 " in l or l.endswith("trecho 0") for l in app._history))
+        self.assertTrue(any(l.endswith(f"trecho {total - 1}") for l in app._history))
+        self.assertFalse(any(l.endswith("trecho 0") for l in app._history))
 
     def test_o_item_existe_no_menu(self):
         # O handler pode estar perfeito e o item não aparecer: o rumps

@@ -103,7 +103,7 @@ quase sempre ele ouviu, só que transcreveu a palavra de ativação de
 outro jeito, ou detectou o idioma errado (ver "Se ele não te
 reconhece", abaixo).
 
-E logo abaixo, **Recent activity…** — as últimas 40 linhas de *o que
+E logo abaixo, **Recent activity…** — as últimas 25 linhas de *o que
 ele ouviu* e *o que ele decidiu fazer*, com horário. O **Heard:** só
 guarda a ÚLTIMA frase e é substituído a cada poucos segundos, então
 quando você abre o menu pra investigar, o trecho que interessa já foi

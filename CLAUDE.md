@@ -219,7 +219,7 @@ não bug daqui).
   erro de transcrição, mesma regra do fechamento e pelo mesmo motivo:
   os dois desfechos são irreversíveis.
 
-- **"Recent activity…": as últimas 40 linhas de "ouvi X / decidi Y",
+- **"Recent activity…": as últimas 25 linhas de "ouvi X / decidi Y",
   só na MEMÓRIA.** O "Heard:" do menu responde "ele está me ouvindo
   agora?", mas não responde a pergunta que aparece de verdade num teste
   real: "falei o comando faz 30 segundos e não aconteceu nada — o que
@@ -239,11 +239,19 @@ não bug daqui).
   a dúvida é sempre sobre o passado recente. `deque(maxlen=...)` sem
   lock: append/list são atômicos no CPython, o pior caso é uma linha
   fora de ordem (irrelevante pra diagnóstico) e segurar lock dentro do
-  laço de transcrição seria pior. `_log_activity()` NÃO passa por
+  laço de transcrição seria pior. O teto é BAIXO (25) porque a janela é
+  um `NSAlert` (`rumps.alert()`), que cresce junto com o texto e não
+  rola — 40 linhas compridas renderiam um alerta mais alto que a tela,
+  inútil justamente na hora de ler. E linha comprida é encurtada NO
+  MEIO, nunca no fim (`_elide()`): as duas pontas de uma linha `heard`
+  são os dois pontos de diagnóstico — a wake word abre a frase, o
+  gatilho de fechamento ("over"/"câmbio") fecha —, então cortar o fim
+  jogaria fora justamente a metade que explica por que o ditado não foi
+  mandado. `_log_activity()` NÃO passa por
   `AppHelper.callAfter` — a regra da thread principal vale pra mutação
   de UI, e aqui não há nenhuma. Trecho silencioso não entra (senão o
-  silêncio consumiria as 40 linhas e empurraria pra fora justamente o
-  comando que falhou). 8 testes.
+  silêncio consumiria as 25 linhas e empurraria pra fora justamente o
+  comando que falhou). 10 testes.
 - **Toda string que `DictationSession.handle()` devolve é UI de
   produto, então está em INGLÊS.** Elas iam direto pro `notify()` (uma
   notificação do macOS — interface, não log interno) e agora aparecem
@@ -607,7 +615,7 @@ Módulos principais (mic local, sempre ativos):
   `__init__` quanto pelo menu — as três derivadas mudam juntas); wake
   word exige reabrir, porque `dictation.py`/`command_router.py` leem
   `WAKE_WORD` uma vez na importação. **"Recent activity…"** mostra as
-  últimas 40 linhas de "ouvi X / decidi Y" (`_log_activity()`,
+  últimas 25 linhas de "ouvi X / decidi Y" (`_log_activity()`,
   `_history`) — é a ferramenta de diagnóstico do teste manual, ver a
   decisão sobre ela acima. O estado "mandou" é um
   FLASH (`_flash_state`, ~2,5s) e não um estado fixo: mandar é um
@@ -617,7 +625,7 @@ Módulos principais (mic local, sempre ativos):
   timer relê `_current_state` na hora de voltar em vez de capturar o
   estado de antes: entre o flash e o disparo dá tempo de parar a
   escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
-  desfeito por um timer velho. 77 testes
+  desfeito por um timer velho. 79 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -712,7 +720,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 316 testes no total. Rodar com:
+- `test_*.py` — 318 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que

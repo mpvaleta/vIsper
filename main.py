@@ -67,9 +67,21 @@ MODEL_SIZE = "base"  # tiny/base/small — maior = mais preciso, mais lento
 # tempo todo, então gravar transcrição em arquivo seria uma mudança de
 # privacidade que ninguém pediu — e pra diagnosticar não é preciso,
 # porque a dúvida ("por que não funcionou agora?") é sempre sobre o
-# passado recente. 40 linhas cobrem bem mais que 40 trechos de tempo:
+# passado recente. 25 linhas cobrem bem mais que 25 trechos de tempo:
 # trecho silencioso não transcreve nada e não entra aqui.
-HISTORY_MAX = 40
+#
+# O teto é baixo porque a janela é um NSAlert (rumps.alert()), que
+# cresce junto com o texto e não rola: guardar 40 linhas compridas
+# renderia um alerta mais alto que a tela — inútil justamente no
+# momento em que ele precisa ser lido.
+HISTORY_MAX = 25
+
+# Linha mais comprida que isso é encurtada NO MEIO na hora de mostrar.
+# No meio, não no fim, de propósito: as duas pontas de uma linha
+# `heard` são exatamente os dois pontos de diagnóstico — a wake word
+# abre a frase e o gatilho de fechamento ("over"/"câmbio") fecha. Cortar
+# o fim jogaria fora metade da resposta.
+HISTORY_LINE_MAX = 110
 
 # ---------------------------------------------------------------------
 # ESTADOS — o que aparece na barra de menu.
@@ -130,6 +142,18 @@ def notify(titulo, subtitulo, mensagem):
         rumps.notification(titulo, subtitulo, mensagem)
     except Exception:
         print(f"[vIsper] {subtitulo}: {mensagem}", flush=True)
+
+
+def _elide(linha, limite=HISTORY_LINE_MAX):
+    """Encurta uma linha comprida PELO MEIO — ver HISTORY_LINE_MAX."""
+    if len(linha) <= limite:
+        return linha
+    # Sobra mais pro começo: é onde está o horário, o marcador e a wake
+    # word. O fim guarda só o suficiente pra mostrar como a frase
+    # terminou (o gatilho de fechamento mora ali).
+    fim = 40
+    inicio = limite - fim - 3
+    return f"{linha[:inicio]}...{linha[-fim:]}"
 
 
 class VisperApp(rumps.App):
@@ -731,7 +755,7 @@ class VisperApp(rumps.App):
         por cento" vira "50%" com frequência — não vira código de
         formatação.
         """
-        linhas = list(self._history)
+        linhas = [_elide(l) for l in self._history]
         if not linhas:
             rumps.alert(
                 "Recent activity",
