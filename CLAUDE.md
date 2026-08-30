@@ -874,6 +874,33 @@ mudar bastante antes de virar assets de produção.
    `enablement: true` falha com "Resource not accessible by
    integration" — confirmado numa execução real. O `pages.yml`
    degrada com instrução em vez de ficar vermelho pra sempre.
+9b. **Depois de ligado, o Pages só publica de verdade quando o push é
+   em `main` — pushes na branch de trabalho (`claude/**`, que o
+   trigger do `pages.yml` alega suportar) falham em ~2s, ANTES de
+   qualquer step rodar.** Achado revisando o histórico de execuções
+   depois que a Valeta relatou "o app do telefone quase não
+   funcionou": o site publicado (`mpvaleta.github.io/vIsper/`) ficou
+   dias parado na versão da última vez que uma PR tinha sido mergeada
+   em `main`, enquanto 3 pushes seguidos na branch de trabalho —
+   incluindo o commit que trocou o envio automático do PWA de "só
+   funciona com Web Speech API" pra "funciona por ociosidade, sem
+   depender do Web Speech" — falharam ao publicar. A Valeta chegou a
+   tentar `workflow_dispatch` manual na mesma branch e bateu no mesmo
+   erro. O padrão (falha quase instantânea, zero steps executados) é a
+   assinatura de uma regra de proteção de branch no ambiente de
+   deployment `github-pages` do próprio repositório (Settings →
+   Environments → github-pages → Deployment branches and tags) — algo
+   que só a dona do repositório consegue ver/mudar, e que nenhuma
+   ferramenta disponível nas sessões deste projeto consegue ler ou
+   ajustar (não é um arquivo versionado). Efeito prático: **testar o
+   app de iPhone pelo link publicado só reflete código que já foi
+   mergeado em `main`** — testar antes disso exige servir `docs/`
+   localmente (`python3 -m http.server` na pasta) ou aceitar que o
+   teste real só vale depois do merge. Resolvido nesta sessão mergeando
+   a PR pendente na hora (ver "O que JÁ foi validado" abaixo), mas a
+   causa raiz (a regra de proteção) continua lá pra próxima branch de
+   trabalho — vale checar aquele menu de Settings antes de assumir que
+   "quase nada funciona" é bug de código.
 10. `vad_filter=True` e `hotwords` foram acrescentados só no loop do
    Whisper contínuo (`main._listen_loop_whisper`).
    `porcupine_session.py` e `audio_file_input.py` continuam sem os
@@ -909,6 +936,14 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
   comportamento COM microfone e COM permissões concedidas.
 - **O app de iPhone funciona num navegador real** (39 testes,
   `test_pwa.js`, no CI a cada push).
+- **O link publicado (`mpvaleta.github.io/vIsper/`) está atualizado
+  com o código mais recente** — confirmado nesta sessão via a API do
+  GitHub (histórico de execuções do `pages.yml` + `git diff` entre
+  `main` e a branch de trabalho): a PR pendente com o fix de envio
+  automático sem Web Speech API estava, até aqui, mergeada localmente
+  mas NUNCA publicada (ver limitação 9b). Mergeada e republicada nesta
+  sessão; a execução em `main` terminou verde. Antes disso, qualquer
+  teste no iPhone real estava rodando a versão de semanas atrás.
 - **`python3 main.py` roda de verdade num Mac** — a Valeta testou.
   Ícone aparece, escuta liga, permissões de Microfone/Acessibilidade
   funcionam, o modelo baixa e carrega. Achou (e já está corrigido) o
