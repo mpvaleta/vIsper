@@ -5,7 +5,9 @@
  * O que dá pra validar aqui: a montagem da mensagem que vai pro Mac
  * (que é o contrato com dictation.py), a leitura do link de
  * configuração, a persistência, o seletor de IA, e o envio automático
- * com janela de cancelamento. A requisição pro ntfy.sh é interceptada
+ * por ociosidade com a janela de cancelamento — inclusive o caminho
+ * SEM Web Speech (digitar/ditar pelo teclado), que é o que precisa
+ * funcionar sem apertar nada. A requisição pro ntfy.sh é interceptada
  * — o proxy deste sandbox bloqueia ntfy.sh de qualquer forma.
  *
  * O que NÃO dá pra validar aqui e continua só testável num iPhone de
@@ -202,6 +204,95 @@ const servidor = http.createServer((req, res) => {
   await p4.click('#btn-send');
   await p4.waitForTimeout(400);
   check('nenhum erro de JS', erros.length === 0, erros.join(' | '));
+
+  // ---------------------------------------------------------------
+  // O pedido era literal: "eu nao quero ter que apertar enviar para o
+  // Mac". O Web Speech API nao existe no Chromium sem cabecalho, e no
+  // iPhone real ele some quando o app roda a partir da tela de inicio
+  // — entao o caminho que PRECISA funcionar sem toque nenhum e o do
+  // teclado (tecla de microfone) e o de digitar: parou de mexer,
+  // manda sozinho.
+  console.log('\n9) Envio automatico sem tocar em "Send to Mac"');
+  const ctx5 = await navegador.newContext(devices['iPhone 13']);
+  const p5 = await novaPagina(ctx5);
+  await p5.goto(`${base}#t=${TOPICO}&w=V%C3%A9sper`);
+  await p5.waitForTimeout(300);
+
+  // Digitar (é o mesmo evento `input` que a tecla de microfone do
+  // teclado do iPhone dispara) e nao encostar em mais nada.
+  await p5.type('#text', 'que horas sao');
+  await p5.waitForTimeout(3000);   // 2.5s de ociosidade + folga
+  check('parar de escrever comeca a contagem sozinho',
+    (await p5.locator('#send-label').textContent()) === 'Tap to cancel',
+    await p5.locator('#send-label').textContent());
+  check('anel de contagem aparece',
+    await p5.locator('#ring-path').isVisible());
+
+  await p5.waitForTimeout(3400);   // deixa a contagem terminar
+  check('mandou sem nenhum toque no botao', ctx5.enviados.length === 1,
+    `${ctx5.enviados.length}`);
+  check('mensagem automatica no mesmo formato do envio manual',
+    (ctx5.enviados[0] || {}).corpo === 'Vésper claude que horas sao over',
+    (ctx5.enviados[0] || {}).corpo);
+
+  // Continuar escrevendo durante a contagem cancela e rearma — quem
+  // esta corrigindo nao pode ver a frase pela metade sair voando.
+  ctx5.enviados.length = 0;
+  await p5.type('#text', 'primeira parte');
+  await p5.waitForTimeout(3000);
+  check('contagem em andamento antes de corrigir',
+    (await p5.locator('#send-label').textContent()) === 'Tap to cancel');
+  await p5.type('#text', ' e a segunda');
+  await p5.waitForTimeout(200);
+  check('digitar no meio da contagem cancela',
+    (await p5.locator('#send-label').textContent()) === 'Send to Mac',
+    await p5.locator('#send-label').textContent());
+  // `hidden` em SVG so responde a atributo, nao a propriedade — se
+  // alguem trocar de volta pra `.hidden = true`, o anel fica desenhado
+  // por cima do botao pra sempre e este check pega.
+  check('anel some quando a contagem e cancelada',
+    await p5.locator('#ring-path').isHidden());
+  check('nada foi mandado pela metade', ctx5.enviados.length === 0);
+
+  await p5.waitForTimeout(6200);   // ociosidade + contagem de novo
+  check('parar de corrigir volta a mandar sozinho', ctx5.enviados.length === 1,
+    `${ctx5.enviados.length}`);
+  check('mandou a frase inteira, nao so o pedaco',
+    (ctx5.enviados[0] || {}).corpo ===
+      'Vésper claude primeira parte e a segunda over',
+    (ctx5.enviados[0] || {}).corpo);
+
+  // Cancelar de proposito tem que valer: se a ociosidade rearmasse
+  // sozinha, o toque de cancelar nao serviria pra nada.
+  ctx5.enviados.length = 0;
+  await p5.type('#text', 'isso eu nao quero mandar');
+  await p5.waitForTimeout(3000);
+  await p5.click('#btn-send');
+  await p5.waitForTimeout(200);
+  check('toque no botao durante a contagem cancela',
+    (await p5.locator('#send-label').textContent()) === 'Send to Mac');
+  await p5.waitForTimeout(6200);
+  check('cancelado de proposito continua cancelado',
+    ctx5.enviados.length === 0, `${ctx5.enviados.length}`);
+
+  // Desligar o automatico desliga de verdade.
+  await p5.click('#btn-settings');
+  await p5.waitForTimeout(200);
+  await p5.uncheck('#in-autosend');
+  await p5.click('#btn-save');
+  await p5.waitForTimeout(200);
+  ctx5.enviados.length = 0;
+  await p5.fill('#text', '');
+  await p5.type('#text', 'sem automatico agora');
+  await p5.waitForTimeout(6200);
+  check('com o automatico desligado nao manda nada sozinho',
+    ctx5.enviados.length === 0, `${ctx5.enviados.length}`);
+  check('e o botao continua mandando na mao',
+    await (async () => {
+      await p5.click('#btn-send');
+      await p5.waitForTimeout(400);
+      return ctx5.enviados.length === 1;
+    })(), `${ctx5.enviados.length}`);
 
   await navegador.close();
   servidor.close();

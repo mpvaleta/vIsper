@@ -62,15 +62,41 @@ código pegaria:
 
 ## Barra de menu do Mac
 
-O ícone do app É o estado, com a mesma paleta semântica (ver
-`main.STATE_GLYPHS`): ⏳ carregando, 🎙 parado, 🟢 escutando,
-🔴 ditando, 🔵 mandou, 🟠 erro.
+O ícone do app É o estado (`main.STATUS_ICONS`, os PNGs de
+`status_icons/`, gerados por `design/generate_status_icons.py`).
+**Forma e cor comunicam coisas diferentes, de propósito**: a forma é a
+silhueta do mascote — a MESMA de `menubar_icon_template.svg`, o
+briefing — e não muda nunca, porque é o que identifica o vIsper na
+barra; a cor é a paleta semântica, e é ela que diz o estado (cinza
+parado, âmbar carregando, verde escutando, coral ditando, azul mandou,
+terracota erro). É a regra de "cor de marca separada de cor de status"
+do CLAUDE.md aplicada num eixo a mais.
 
-Círculo colorido em vez do glifo monocromático de
-`menubar_icon_template.svg` por um motivo prático: a convenção da
-Apple (silhueta template, invertida pelo sistema) é boa pra IDENTIDADE,
-mas não consegue comunicar ESTADO — template image é uma cor só, por
-definição. Trocar o desenho a cada estado exigiria seis assets e não
-resolveria o mais importante, que é dar pra distinguir de relance
-"escutando" de "parado". O glifo continua valendo pra quando o app
-tiver um ícone fixo de identidade.
+Passou por três versões, e as duas primeiras ensinaram uma coisa cada:
+
+1. **Emoji** (⏳🎙🟢🔴🔵🟠) como texto do título. Funcionava, mas a
+   Valeta testou e apontou que "as cores que você falou não estão
+   funcionando" — emoji usa as cores do FONTE da Apple, não a paleta
+   documentada (🟠 não é terracota; 🎙 não tem cor de estado nenhuma).
+2. **Círculo colorido sólido.** Cor certa, forma jogada fora — "os
+   ícones deveriam seguir o briefing inicial". Lição: acertar um eixo
+   não vale quebrar o outro.
+3. **Silhueta do mascote na cor do estado** (atual). Os dois eixos ao
+   mesmo tempo.
+
+Por que NÃO usar "template image" (a convenção da Apple de silhueta
+monocromática invertida pelo sistema): template é uma cor só, por
+definição — ligar isso apagaria a cor do estado pelo mesmo motivo do
+emoji, só que por outro caminho. Confirmado no source do rumps 0.4.0
+(`_nsimage_from_file`, `image.setTemplate_`).
+
+Detalhe técnico de quem for mexer no gerador: o rumps fixa a imagem em
+20×20 PONTOS (`image.setSize_((20, 20))`, sem como passar outro valor
+pela propriedade `.icon`), então o PNG precisa ser QUADRADO — imagem
+não-quadrada seria espremida. Os 88px de lado dão bitmap de sobra pra
+reduzir com qualidade em tela Retina 2x (40px) e 3x (60px).
+
+`test_status_icons.py` fecha os dois círculos comparando os BYTES do
+PNG: a cor contra o hex de `layouts_mockup.html`, e pontos do desenho
+(dentro do corpo, na haste da antena, no vão ENTRE as antenas) contra
+a geometria de `menubar_icon_template.svg`.

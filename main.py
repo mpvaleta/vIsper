@@ -30,10 +30,14 @@ Texto de interface em INGLÊS de propósito (decisão registrada no
 CLAUDE.md); comentários e documentação continuam em português.
 """
 
+import os
 import re
 import threading
+import time
+from collections import deque
 import rumps
 from faster_whisper import WhisperModel
+from PyObjCTools import AppHelper
 
 from audio_input import (
     AudioStream,
@@ -57,9 +61,27 @@ import config
 
 
 MODEL_SIZE = "base"  # tiny/base/small — maior = mais preciso, mais lento
-# language=None deixa o Whisper detectar o idioma a cada trecho, pra
-# funcionar em português, inglês, ou qualquer outro que você fale.
-LANGUAGE = None
+
+# Quantas linhas de "o que ouvi / o que decidi" ficam guardadas pra
+# "Recent activity…". Só na MEMÓRIA, nunca em disco: o app escuta o
+# tempo todo, então gravar transcrição em arquivo seria uma mudança de
+# privacidade que ninguém pediu — e pra diagnosticar não é preciso,
+# porque a dúvida ("por que não funcionou agora?") é sempre sobre o
+# passado recente. 25 linhas cobrem bem mais que 25 trechos de tempo:
+# trecho silencioso não transcreve nada e não entra aqui.
+#
+# O teto é baixo porque a janela é um NSAlert (rumps.alert()), que
+# cresce junto com o texto e não rola: guardar 40 linhas compridas
+# renderia um alerta mais alto que a tela — inútil justamente no
+# momento em que ele precisa ser lido.
+HISTORY_MAX = 25
+
+# Linha mais comprida que isso é encurtada NO MEIO na hora de mostrar.
+# No meio, não no fim, de propósito: as duas pontas de uma linha
+# `heard` são exatamente os dois pontos de diagnóstico — a wake word
+# abre a frase e o gatilho de fechamento ("over"/"câmbio") fecha. Cortar
+# o fim jogaria fora metade da resposta.
+HISTORY_LINE_MAX = 110
 
 # ---------------------------------------------------------------------
 # ESTADOS — o que aparece na barra de menu.
@@ -69,20 +91,34 @@ LANGUAGE = None
 # básica de todas — "ele está me ouvindo agora?" — sem falar uma frase
 # de teste e torcer.
 #
-# As cores são as MESMAS da paleta semântica de design/layouts_mockup.html
-# (cinza=ocioso, verde=escutando, âmbar=ocupado, coral=ditando,
-# azul=mandou, terracota=erro). Círculo colorido em vez de imagem
-# template porque a bolinha lê bem no tamanho da barra de menu e
-# funciona igual em modo claro e escuro, sem precisar de dois assets
-# nem de arquivo externo que o py2app teria que empacotar.
+# A SILHUETA DO MASCOTE colorida, não emoji e não um círculo liso.
+# Dois eixos que comunicam coisas diferentes: a FORMA é sempre a
+# mesma (o desenho de design/menubar_icon_template.svg — é o que
+# identifica o vIsper entre os outros ícones da barra), e só a COR
+# muda com o estado.
+#
+# As duas versões anteriores erraram um eixo cada. Emoji
+# (⏳🎙🟢🔴🔵🟠) como TÍTULO: as cores eram as do FONTE DE EMOJI da
+# Apple, não as da paleta documentada (design/layouts_mockup.html) —
+# 🟠 não é terracota, 🎙 não tem cor de estado nenhuma. Círculo
+# sólido: cor certa, identidade jogada fora. As cores abaixo são as
+# MESMAS (mesmo hex) do mockup — cinza=parado, âmbar=carregando,
+# verde=escutando, coral=ditando, azul=mandou, terracota=erro.
+#
+# Os PNGs (status_icons/, gerados por
+# design/generate_status_icons.py) entram SEM modo template: template
+# forçaria monocromático (preto/branco conforme claro/escuro) e a cor
+# documentada sumiria de novo — o mesmo problema do emoji, só que por
+# outro caminho.
 # ---------------------------------------------------------------------
-STATE_GLYPHS = {
-    "stopped": "🎙",    # parado — mas vivo, e claramente o vIsper
-    "loading": "⏳",     # carregando o modelo de transcrição
-    "listening": "🟢",  # escutando, esperando a wake word
-    "dictating": "🔴",  # ouviu a wake word, acumulando o ditado
-    "sent": "🔵",       # acabou de colar e mandar
-    "error": "🟠",      # algo falhou — o menu explica o quê
+_ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "status_icons")
+STATUS_ICONS = {
+    "stopped": os.path.join(_ICON_DIR, "stopped.png"),      # parado — mas vivo
+    "loading": os.path.join(_ICON_DIR, "loading.png"),      # carregando o modelo
+    "listening": os.path.join(_ICON_DIR, "listening.png"),  # esperando a wake word
+    "dictating": os.path.join(_ICON_DIR, "dictating.png"),  # acumulando o ditado
+    "sent": os.path.join(_ICON_DIR, "sent.png"),            # acabou de colar e mandar
+    "error": os.path.join(_ICON_DIR, "error.png"),          # o menu explica o quê
 }
 
 
@@ -108,9 +144,41 @@ def notify(titulo, subtitulo, mensagem):
         print(f"[vIsper] {subtitulo}: {mensagem}", flush=True)
 
 
+def _elide(linha, limite=HISTORY_LINE_MAX):
+    """Encurta uma linha comprida PELO MEIO — ver HISTORY_LINE_MAX."""
+    if len(linha) <= limite:
+        return linha
+    # Sobra mais pro começo: é onde está o horário, o marcador e a wake
+    # word. O fim guarda só o suficiente pra mostrar como a frase
+    # terminou (o gatilho de fechamento mora ali).
+    #
+    # Os limites são calculados a partir de `limite` em vez de fixos
+    # porque um `fim` fixo maior que o próprio limite deixaria `inicio`
+    # NEGATIVO — e aí `linha[:inicio]` cortaria pelo fim em vez de
+    # truncar, devolvendo em silêncio uma linha errada e mais comprida
+    # que o pedido, em vez de dar erro.
+    fim = min(40, max(1, (limite - 3) // 2))
+    inicio = max(1, limite - fim - 3)
+    return f"{linha[:inicio]}...{linha[-fim:]}"
+
+
 class VisperApp(rumps.App):
     def __init__(self):
-        super().__init__(STATE_GLYPHS["loading"], icon=None, quit_button=None)
+        # name="vIsper" (não mais o glifo de estado): rumps usa esse
+        # valor pra nomear a pasta de Application Support dele
+        # (rumps.application_support) — deixar um caractere de estado
+        # ali criaria (inofensivamente, mas sem sentido) uma pasta com
+        # nome de emoji. icon= já entra com o ícone de "carregando":
+        # sem isso o app ficava com o nome como texto até o primeiro
+        # _set_state(), um instante de UI errada.
+        super().__init__(
+            "vIsper", icon=STATUS_ICONS["loading"], title=None, quit_button=None
+        )
+        # Rastreado à parte de self.icon/self.title de propósito — ver
+        # _set_state(). A atualização REAL do AppKit é assíncrona
+        # (despachada pra thread principal); reler self.icon logo
+        # depois de chamar _set_state() pegaria o valor ANTIGO.
+        self._current_state = "loading"
         self.router = CommandRouter(actions.AI_ACTIONS)
         self.session = DictationSession(
             router=self.router,
@@ -118,6 +186,7 @@ class VisperApp(rumps.App):
             send_action=actions.handle_done,
             on_open=self._on_dictation_open,
             on_send=self._on_dictation_send,
+            on_cancel=self._on_dictation_cancel,
         )
 
         # O modelo do Whisper é carregado numa THREAD, não aqui.
@@ -169,6 +238,17 @@ class VisperApp(rumps.App):
         # está com o settings.json aplicado aqui.
         self._hotwords = config.transcription_hotwords()
 
+        # Idiomas que ela fala (ver config.TRANSCRIPTION_LANGUAGES).
+        # Um só = força ele e pula a detecção. Vários = detecta mas
+        # valida contra a lista. Nenhum = sem restrição.
+        # Último idioma que passou na validação — vira o idioma de
+        # reserva quando a detecção sai da lista ou vem insegura.
+        # Melhor reserva do que o primeiro da lista: pessoa não troca
+        # de idioma a cada 4 segundos, então "o que estava valendo
+        # agora há pouco" acerta bem mais que um padrão fixo.
+        self._last_good_language = None
+        self._apply_languages(config.TRANSCRIPTION_LANGUAGES)
+
         # Última coisa que o Whisper entendeu. Fica visível no menu
         # porque a falha mais confusa deste app é a wake word ser
         # transcrita errada: sem isso, "ele não me ouve" e "ele me ouviu
@@ -176,17 +256,44 @@ class VisperApp(rumps.App):
         # a segunda é a mais provável (a wake word padrão é uma palavra
         # inventada — ver "Limite atual do reconhecimento" no README).
         self._last_heard = ""
+        # O "Heard:" acima mostra só o ÚLTIMO trecho, cortado em 45
+        # caracteres — some assim que chega o próximo. Isso basta pra
+        # "ele está me ouvindo?", mas não pra "falei o comando faz 30
+        # segundos e não aconteceu nada, o que ele entendeu?": quando
+        # ela abre o menu, a prova já foi sobrescrita. Este histórico é
+        # a resposta dessa segunda pergunta — ver HISTORY_MAX.
+        #
+        # deque(maxlen=...) é escrito pelas threads de escuta e lido
+        # pela thread principal (o @rumps.clicked). Não leva lock de
+        # propósito: append/list numa deque são atômicos no CPython, e
+        # o pior caso possível aqui seria uma linha entrar fora de
+        # ordem — irrelevante pra diagnóstico, e bem melhor que segurar
+        # um lock dentro do laço de transcrição.
+        self._history = deque(maxlen=HISTORY_MAX)
+        # Timer que desfaz um estado momentâneo (hoje só o "mandou") —
+        # ver _flash_state(). Um por vez; começar outro cancela o
+        # anterior.
+        self._revert_timer = None
 
         self.mic_menu = rumps.MenuItem("Microphone")
+        # Ver o guard em _rebuild_mic_menu(): o rumps só cria o NSMenu
+        # interno do submenu no primeiro .add() — antes disso,
+        # MenuItem.clear() explode tentando limpar um menu que ainda
+        # não existe. Essa flag é o que diferencia "primeira vez" de
+        # "reconstruindo".
+        self._mic_menu_populated = False
         self.heard_item = rumps.MenuItem("Heard: —", callback=None)
         self.menu = [
             self.heard_item,
+            "Recent activity…",
             None,
             "Start listening",
             "Stop listening",
             None,
             self.mic_menu,
-            "Settings…",
+            "Wake word…",
+            "Spoken languages…",
+            "iPhone connection…",
             None,
             "Quit vIsper",
         ]
@@ -230,22 +337,109 @@ class VisperApp(rumps.App):
     # ------------------------------------------------------------------
 
     def _set_state(self, state):
-        """Troca o glifo da barra de menu. Ver STATE_GLYPHS."""
-        self.title = STATE_GLYPHS.get(state, STATE_GLYPHS["stopped"])
+        """
+        Troca o ícone colorido da barra de menu. Ver STATUS_ICONS.
+
+        SEMPRE despachado pra thread principal via AppHelper.callAfter
+        — bug real, achado rodando de verdade: main.py chama isto de
+        THREADS DE FUNDO o tempo todo (_load_model, _listen_loop_*,
+        _on_result vindo do relay do iPhone), e mexer em NSStatusItem
+        fora da main thread é uma violação de verdade do AppKit
+        ("Must only be used from the main thread") — crashava na hora
+        que a pessoa tinha o menu ABERTO enquanto uma dessas threads
+        tentava atualizar o ícone por baixo. AppHelper.callAfter (do
+        PyObjCTools que já vem com pyobjc-framework-Cocoa, dependência
+        do próprio rumps — nada novo pra instalar) resolve isso do
+        jeito padrão: `performSelectorOnMainThread_withObject_
+        waitUntilDone_`, o mesmo mecanismo que qualquer app PyObjC
+        usa. Seguro chamar daqui até da própria main thread (só enfileira
+        pro próximo ciclo do runloop).
+        """
+        self._current_state = state
+        icon_path = STATUS_ICONS.get(state, STATUS_ICONS["stopped"])
+        AppHelper.callAfter(setattr, self, "icon", icon_path)
+
+    def _flash_state(self, state, seconds=2.5):
+        """Mostra um estado por alguns segundos e volta pro que a
+        situação REAL manda.
+
+        Existe porque "mandou" (azul) é um EVENTO, não uma situação: o
+        app continua escutando logo depois. Sem isso o azul ficava até
+        a próxima coisa acontecer — podiam ser minutos —, e o ícone
+        passava esse tempo todo respondendo errado a pergunta que ele
+        existe pra responder ("ele está me ouvindo agora?").
+
+        `_current_state` é relido na hora de voltar, não capturado
+        agora: entre o flash e o timer a pessoa pode ter apertado
+        "Stop listening", começado outro ditado, ou dado erro — e
+        nenhum desses pode ser desfeito por um timer velho.
+        """
+        self._set_state(state)
+        if self._revert_timer is not None:
+            self._revert_timer.cancel()
+
+        def voltar():
+            # A referência do timer NÃO é limpa aqui de propósito:
+            # cancel() num Timer que já disparou é inofensivo, e
+            # deixar a referência viva é o que permite esperar por ele
+            # (nos testes) sem corrida.
+            #
+            # Só desfaz o PRÓPRIO flash: se o estado já mudou, quem
+            # mudou tem mais razão que este timer.
+            if self._current_state != state:
+                return
+            if self.session.dictating:
+                self._set_state("dictating")
+            else:
+                self._set_state("listening" if self.listening else "stopped")
+
+        self._revert_timer = threading.Timer(seconds, voltar)
+        # Daemon: um timer pendente não pode segurar o processo aberto
+        # depois de "Quit vIsper".
+        self._revert_timer.daemon = True
+        self._revert_timer.start()
+
+    def _log_activity(self, marker, texto):
+        """Guarda uma linha no histórico de "Recent activity…".
+
+        Só memória, nunca disco — ver HISTORY_MAX. Chamado das threads
+        de escuta, mas NÃO precisa de AppHelper.callAfter: não toca em
+        nada do AppKit, só numa deque de Python. A regra da thread
+        principal vale pra MUTAÇÃO DE UI, e aqui não há nenhuma.
+        """
+        if not texto:
+            return
+        self._history.append(f"{time.strftime('%H:%M:%S')}  {marker}  {texto}")
 
     def _set_heard(self, texto):
-        """Mostra no menu o que o Whisper entendeu por último."""
+        """Mostra no menu o que o Whisper entendeu por último. Mesmo
+        motivo de _set_state() pra despachar via callAfter — chamado
+        de _listen_loop_whisper() e _load_model(), as duas threads de
+        fundo."""
         self._last_heard = texto or ""
+        self._log_activity("heard", self._last_heard)
         curto = self._last_heard[:45] + ("…" if len(self._last_heard) > 45 else "")
-        self.heard_item.title = f"Heard: {curto}" if curto else "Heard: —"
+        label = f"Heard: {curto}" if curto else "Heard: —"
+        AppHelper.callAfter(setattr, self.heard_item, "title", label)
 
     def _on_dictation_open(self):
         self._set_state("dictating")
         self._play_dictation_sound(config.DICTATION_OPEN_SOUND)
 
     def _on_dictation_send(self):
-        self._set_state("sent")
+        # Flash, não estado fixo: mandar é um evento e a escuta segue —
+        # ver _flash_state().
+        self._flash_state("sent")
         self._play_dictation_sound(config.DICTATION_SEND_SOUND)
+
+    def _on_dictation_cancel(self):
+        """"vIsper, cancela" — o ditado foi jogado fora, nada foi
+        mandado. Volta direto pro estado de escuta (não passa por
+        "sent", que quer dizer o oposto) e toca um som DIFERENTE: se
+        cancelar soasse igual a mandar, a dúvida que o cancelamento
+        existe pra tirar continuaria de pé."""
+        self._set_state("listening" if self.listening else "stopped")
+        self._play_dictation_sound(config.DICTATION_CANCEL_SOUND)
 
     # ------------------------------------------------------------------
     # Carregamento do modelo (em thread — ver __init__)
@@ -273,13 +467,21 @@ class VisperApp(rumps.App):
     # Seleção de microfone — automática (DJI > fone Bluetooth > padrão
     # do sistema, ver config.PREFERRED_INPUT_DEVICES) ou manual.
     #
-    # NUNCA TESTADO num Mac de verdade, como o resto deste arquivo: a
-    # API de submenu dinâmico do rumps usada abaixo (MenuItem.clear()/
+    # A API de submenu dinâmico do rumps usada abaixo (MenuItem.clear()/
     # .add(), estado de checkmark via .state, título mutável via
     # .title) foi conferida linha a linha contra o SOURCE real do
     # pacote (rumps==0.4.0, baixado da PyPI — não só documentação nem
-    # de memória), mas isso não substitui ver o AppKit/NSMenu de
-    # verdade renderizar o menu.
+    # de memória). Mas ISSO NÃO PEGOU um detalhe de TIMING que só um
+    # Mac de verdade revelou: MenuItem.clear() chama
+    # `self._menu.removeAllItems()`, e `self._menu` (o NSMenu do
+    # submenu) só é criado dentro do rumps na hora do PRIMEIRO
+    # `.add()` — antes disso ele é `None`. Chamar `.clear()` num
+    # MenuItem que nunca recebeu um `.add()` (exatamente o caso da
+    # primeiríssima chamada, vinda do `__init__`) levantava
+    # `AttributeError: 'NoneType' object has no attribute
+    # 'removeAllItems'` e derrubava o app ANTES do ícone existir — a
+    # categoria de bug mais grave que existe aqui, porque sem Terminal
+    # não sobra rastro nenhum. Confirmado rodando de verdade.
     # ------------------------------------------------------------------
 
     def _rebuild_mic_menu(self):
@@ -288,11 +490,16 @@ class VisperApp(rumps.App):
         pode ter mudado (escolha manual, voltou pro automático, ou
         logo antes de tentar escutar), pra refletir fone Bluetooth
         ligado/desligado depois que o app já abriu."""
-        self.mic_menu.clear()
+        if self._mic_menu_populated:
+            self.mic_menu.clear()
 
         auto_item = rumps.MenuItem("Detect automatically", callback=self._pick_auto)
         auto_item.state = not self.device_manual
         self.mic_menu.add(auto_item)
+        # A partir daqui o NSMenu interno já existe (foi criado por
+        # esse .add() de cima) — chamadas futuras a _rebuild_mic_menu()
+        # já podem chamar .clear() com segurança.
+        self._mic_menu_populated = True
 
         # label_devices() desambigua o RÓTULO exibido quando dois
         # dispositivos têm o MESMO nome — sem isso, rumps (que indexa
@@ -494,7 +701,146 @@ class VisperApp(rumps.App):
     # configurar o iPhone.
     # ------------------------------------------------------------------
 
-    @rumps.clicked("Settings…")
+    def _apply_languages(self, idiomas):
+        """Passa a valer a lista de idiomas — do __init__ ou do menu.
+
+        Num método só (em vez de repetido nos dois lugares) porque as
+        três coisas derivadas têm que mudar JUNTAS: com um idioma só,
+        `_forced_language` pula a detecção; com vários ela é validada
+        contra `_allowed_languages`; e o idioma de reserva guardado de
+        antes pode nem estar na lista nova, então é zerado.
+        """
+        self._allowed_languages = list(idiomas or [])
+        self._forced_language = (
+            self._allowed_languages[0] if len(self._allowed_languages) == 1 else None
+        )
+        self._last_good_language = None
+
+    def _ask(self, title, message, default_text=""):
+        """Uma caixa de texto do rumps, com o valor atual já dentro.
+
+        Existe porque configurar pelo menu NÃO pode depender de
+        Terminal: quem instalou pelo .dmg não tem o repositório nem o
+        setup_visper.py na máquina — mandar essa pessoa "editar o
+        config.py" é exatamente o atrito que o .dmg foi feito pra
+        tirar.
+
+        Devolve None se cancelou, ou o texto (já aparado) se
+        confirmou. Roda sempre a partir de um @rumps.clicked, ou seja,
+        já na thread principal — rumps.Window cria NSAlert e chama
+        runModal(), que exigem isso (mesma regra do rumps.alert(), ver
+        _set_state()).
+        """
+        resposta = rumps.Window(
+            title=title,
+            message=message,
+            default_text=default_text,
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(340, 24),
+        ).run()
+        if not resposta.clicked:
+            return None
+        return resposta.text.strip()
+
+    @rumps.clicked("Recent activity…")
+    def open_activity(self, _):
+        """As últimas linhas de "ouvi X / decidi Y", numa janela só.
+
+        Existe pro teste de verdade no Mac: quando um comando não
+        funciona, a pergunta é sempre "o que ele entendeu?" — e até
+        agora a resposta já tinha sido sobrescrita pelo trecho
+        seguinte, ou era uma notificação que sumiu em segundos.
+
+        Roda a partir de um @rumps.clicked, ou seja, já na thread
+        principal — que é o que rumps.alert() (NSAlert + runModal())
+        exige. O texto transcrito vai como `message`, não como
+        `title`: `message` é o argumento de informativeTextWithFormat:
+        e o rumps dobra o "%" dele antes de passar adiante (conferido
+        no source do rumps 0.4.0), então uma fala com "%" — "cinquenta
+        por cento" vira "50%" com frequência — não vira código de
+        formatação.
+        """
+        linhas = [_elide(l) for l in self._history]
+        if not linhas:
+            rumps.alert(
+                "Recent activity",
+                "Nothing yet. Start listening and say something.",
+            )
+            return
+        rumps.alert("Recent activity", "\n".join(linhas))
+
+    @rumps.clicked("Wake word…")
+    def open_wake_word(self, _):
+        nova = self._ask(
+            "vIsper wake word",
+            (
+                "The word that wakes vIsper up. Everything you say after it "
+                "is treated as a command.\n\n"
+                "Pick a REAL, distinctive word — vIsper recognises it from a "
+                "transcript, and made-up words get transcribed wrong. "
+                "'Vesper', 'Iris' and 'Whisper' land far more reliably than "
+                "an invented one.\n\n"
+                "Leave it unchanged and press Save to keep what you have."
+            ),
+            config.WAKE_WORD,
+        )
+        if not nova or nova == config.WAKE_WORD:
+            return
+        if not save_settings({"WAKE_WORD": nova}):
+            rumps.alert(f"Could not write the settings file:\n{settings_path()}")
+            return
+        rumps.alert(
+            f"Wake word saved as “{nova}”. Quit and reopen vIsper to start "
+            "using it — and update it on your iPhone too, or what it sends "
+            "will be ignored."
+        )
+
+    @rumps.clicked("Spoken languages…")
+    def open_languages(self, _):
+        atual = ", ".join(config.TRANSCRIPTION_LANGUAGES) or "auto"
+        resposta = self._ask(
+            "Languages you speak",
+            (
+                "Comma-separated language codes — vIsper will never "
+                "transcribe in anything outside this list.\n\n"
+                "This is what fixes “it only understands English”: guessing "
+                "the language from a few seconds of speech is unreliable, "
+                "and whatever it guesses is the language it writes in — so a "
+                "wrong guess becomes wrong TEXT.\n\n"
+                "pt        one language only: skips the guess entirely\n"
+                "pt, en    switches between them safely\n"
+                "auto      no restriction (you take the guessing with it)"
+            ),
+            atual,
+        )
+        if resposta is None or not resposta:
+            return
+        if resposta.lower() in ("auto", "none"):
+            novas = []
+        else:
+            novas = [p.strip().lower() for p in resposta.split(",") if p.strip()]
+        if novas == list(config.TRANSCRIPTION_LANGUAGES):
+            return
+        if not save_settings({"TRANSCRIPTION_LANGUAGES": novas}):
+            rumps.alert(f"Could not write the settings file:\n{settings_path()}")
+            return
+
+        # Vale JÁ, sem reiniciar: ao contrário da wake word (que outros
+        # módulos leem uma vez, na importação), o idioma é lido a cada
+        # transcrição a partir destes atributos. Fazer valer só depois
+        # de reabrir seria pedir pra pessoa reiniciar o app pra testar
+        # cada tentativa — justo no ajuste que ela mais vai querer
+        # tentar de novo.
+        config.TRANSCRIPTION_LANGUAGES = novas
+        self._apply_languages(novas)
+        rumps.alert(
+            "Languages saved: "
+            + (", ".join(novas) if novas else "auto (no restriction)")
+            + ". It already applies — no need to restart."
+        )
+
+    @rumps.clicked("iPhone connection…")
     def open_settings(self, _):
         topico = config.NTFY_TOPIC
         resumo = topico if topico else "(off — iPhone can't reach this Mac)"
@@ -548,14 +894,22 @@ class VisperApp(rumps.App):
         """Retorno único pros dois caminhos de entrada (mic e iPhone)."""
         if not resultado:
             return
+        # As duas metades da história ficam no histórico: o que ele
+        # OUVIU (via _set_heard) e o que ele DECIDIU fazer com isso.
+        # Separadas, porque a falha mais comum é justamente as duas não
+        # combinarem — ouviu certo e decidiu errado, ou nem ouviu.
+        self._log_activity("→", resultado)
         notify("vIsper", "Status", resultado)
         # A máquina de estados é a fonte da verdade: depois de mandar,
         # a sessão volta pra ociosa, e o ícone tem que acompanhar. O
-        # 🔵 de "mandou" é posto por _on_dictation_send e fica até a
-        # próxima transição.
+        # estado "sent" (posto por _on_dictation_send) fica até a
+        # próxima transição — comparado via self._current_state, NÃO
+        # self.icon: a troca de ícone é assíncrona (ver _set_state()),
+        # então ler self.icon aqui logo em seguida podia pegar o valor
+        # ANTIGO e reabrir a corrida que esse guard existe pra evitar.
         if self.session.dictating:
             self._set_state("dictating")
-        elif self.listening and self.title != STATE_GLYPHS["sent"]:
+        elif self.listening and self._current_state != "sent":
             self._set_state("listening")
 
     def _listen_loop_safe(self):
@@ -580,12 +934,19 @@ class VisperApp(rumps.App):
             # único cuja correção é um caminho fixo de Ajustes.
             self.listening = False
             self._set_state("error")
-            rumps.alert(
+            # rumps.alert() cria um NSAlert e chama runModal() — outra
+            # chamada de AppKit que só pode acontecer na thread
+            # principal, e este except roda dentro da thread de escuta
+            # (_listen_loop_safe é o alvo de threading.Thread em
+            # start_listening()). Mesmo despacho de _set_state(); ver
+            # o comentário lá pro porquê.
+            AppHelper.callAfter(
+                rumps.alert,
                 "vIsper needs Accessibility permission to type into your AI "
                 "chat.\n\n"
                 "Open System Settings › Privacy & Security › Accessibility "
                 "and turn vIsper on, then start listening again.\n\n"
-                f"({exc})"
+                f"({exc})",
             )
         except Exception as exc:
             self.listening = False
@@ -598,41 +959,99 @@ class VisperApp(rumps.App):
         else:
             self._listen_loop_whisper(AudioStream(self.device_index))
 
+    def _transcribe(self, chunk, language):
+        """
+        Uma passada de transcrição. Devolve (texto, info).
+
+        `language=None` deixa o Whisper detectar; um código força.
+        """
+        segments, info = self.model.transcribe(
+            chunk,
+            language=language,
+            # vad_filter descarta o que não for fala antes de
+            # transcrever. Sem ele, o Whisper ALUCINA em cima de
+            # silêncio e ruído — costuma devolver frases inteiras
+            # ("Legendas pela comunidade Amara.org", "Obrigado por
+            # assistir") que vinham de vídeo legendado no treino
+            # dele. Num app que escuta o tempo todo isso não é
+            # detalhe: texto inventado entra no ditado como se fosse
+            # fala real, e uma alucinação que contenha a wake word
+            # ou "over" dispara ação sozinha.
+            vad_filter=True,
+            # hotwords: o vocabulário de comando (wake word, nomes
+            # das IAs, câmbio/over) entra como prioridade na
+            # decodificação — "vIsper" é palavra inventada e, sem
+            # isso, o Whisper escreve "whisper"/"vesper" com
+            # frequência. Parâmetro conferido no fonte da wheel
+            # faster-whisper==1.0.3 (a versão pinada), não de
+            # memória. Cada chunk é uma chamada nova de
+            # transcribe(), então a dica vale pra TODO chunk — não
+            # só pro primeiro, como seria com initial_prompt em
+            # áudio longo.
+            hotwords=self._hotwords,
+        )
+        # Mesma correção de audio_file_input.py: os segmentos já
+        # vêm com espaço embutido, " ".join() duplicava.
+        texto = re.sub(r"\s+", " ", "".join(seg.text for seg in segments)).strip()
+        return texto, info
+
+    def _transcribe_in_my_languages(self, chunk):
+        """
+        Transcreve respeitando config.TRANSCRIPTION_LANGUAGES.
+
+        Devolve (texto, rótulo_de_idioma) — o rótulo vai pro "Heard:".
+
+        O problema real que isto resolve: detecção de idioma em áudio
+        CURTO (nossos trechos são de ~4s) é conhecidamente pouco
+        confiável, e o Whisper transcreve NO idioma que ele achou. Ou
+        seja, detecção errada não produz só um rótulo errado — produz
+        TEXTO errado. Foi o que apareceu como "só funciona em inglês".
+
+        Três caminhos, por tamanho da lista:
+          - 1 idioma  -> força, nem detecta. Mais rápido e sem chute.
+          - vários    -> detecta, mas só aceita se cair na lista COM
+                         confiança; senão refaz no idioma de reserva.
+          - vazia     -> sem restrição, aceita o que vier.
+        """
+        if self._forced_language:
+            texto, _info = self._transcribe(chunk, self._forced_language)
+            return texto, self._forced_language
+
+        texto, info = self._transcribe(chunk, None)
+
+        if not self._allowed_languages:
+            return texto, info.language  # sem restrição
+
+        confiavel = info.language_probability >= config.LANGUAGE_CONFIDENCE_THRESHOLD
+        if info.language in self._allowed_languages and confiavel:
+            self._last_good_language = info.language
+            return texto, info.language
+
+        # Detecção fora da lista (ela não fala esse idioma) ou insegura
+        # demais: refazer no idioma de reserva custa uma transcrição
+        # extra, mas o texto da primeira passada estaria no idioma
+        # errado de qualquer forma — não é desperdício, é a correção.
+        reserva = self._last_good_language or self._allowed_languages[0]
+        texto, _info = self._transcribe(chunk, reserva)
+        # O rótulo mostra os DOIS: o que ele achou e o que a gente usou
+        # no lugar. Sem isso, "refez em pt" e "detectou pt de primeira"
+        # ficam indistinguíveis no "Heard:", e some a pista de que a
+        # detecção está indo mal.
+        return texto, f"{info.language}→{reserva}"
+
     def _listen_loop_whisper(self, stream):
         for chunk in stream.chunks():
             if not self.listening:
                 break
-            segments, _info = self.model.transcribe(
-                chunk,
-                language=LANGUAGE,
-                # vad_filter descarta o que não for fala antes de
-                # transcrever. Sem ele, o Whisper ALUCINA em cima de
-                # silêncio e ruído — costuma devolver frases inteiras
-                # ("Legendas pela comunidade Amara.org", "Obrigado por
-                # assistir") que vinham de vídeo legendado no treino
-                # dele. Num app que escuta o tempo todo isso não é
-                # detalhe: texto inventado entra no ditado como se fosse
-                # fala real, e uma alucinação que contenha a wake word
-                # ou "over" dispara ação sozinha.
-                vad_filter=True,
-                # hotwords: o vocabulário de comando (wake word, nomes
-                # das IAs, câmbio/over) entra como prioridade na
-                # decodificação — "vIsper" é palavra inventada e, sem
-                # isso, o Whisper escreve "whisper"/"vesper" com
-                # frequência. Parâmetro conferido no fonte da wheel
-                # faster-whisper==1.0.3 (a versão pinada), não de
-                # memória. Cada chunk é uma chamada nova de
-                # transcribe(), então a dica vale pra TODO chunk — não
-                # só pro primeiro, como seria com initial_prompt em
-                # áudio longo.
-                hotwords=self._hotwords,
-            )
-            # Mesma correção de audio_file_input.py: os segmentos já
-            # vêm com espaço embutido, " ".join() duplicava.
-            text = re.sub(r"\s+", " ", "".join(seg.text for seg in segments)).strip()
-            if text:
-                self._set_heard(text)
-            self._on_result(self.session.handle(text))
+            texto, rotulo_idioma = self._transcribe_in_my_languages(chunk)
+            if texto:
+                # O idioma entra junto no "Heard:" — diagnóstico direto
+                # pra "ele não entende português": se aparecer "[en]"
+                # com você falando português, o problema é a detecção
+                # de idioma (ver config.TRANSCRIPTION_LANGUAGES), não o
+                # app "não suportar" o idioma.
+                self._set_heard(f"[{rotulo_idioma}] {texto}")
+            self._on_result(self.session.handle(texto))
 
     def _listen_loop_porcupine(self):
         # NUNCA TESTADO COM MIC/HARDWARE DE VERDADE — a lógica de
@@ -665,7 +1084,16 @@ class VisperApp(rumps.App):
                 self.model,
                 self.session,
                 sample_rate=self.porcupine_detector.sample_rate,
-                language=LANGUAGE,
+                # Só o idioma FORÇADO (lista de um item) chega aqui.
+                # Com vários idiomas isso fica None e o Porcupine cai
+                # na detecção crua — aceitável porque neste caminho o
+                # áudio já vem recortado pela detecção acústica (é uma
+                # fala inteira, não um trecho de 4s cego), que é
+                # justamente a condição em que a detecção de idioma do
+                # Whisper funciona bem. A validação de
+                # _transcribe_in_my_languages() não se aplica aqui: o
+                # PorcupineSession tem o próprio ciclo de transcrição.
+                language=self._forced_language,
             )
             ps.run(gated_frames(), on_result=self._on_result)
         finally:

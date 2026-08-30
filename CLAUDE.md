@@ -90,6 +90,35 @@ não bug daqui).
   em vez de rapidfuzz de propósito: são ~10 palavras curtas por chunk,
   performance é irrelevante, e uma dependência nativa nova arriscaria
   o build do .app que acabou de ficar verde.
+- **`TRANSCRIPTION_LANGUAGES` é uma LISTA de idiomas permitidos
+  (padrão `["pt", "en"]`), não um idioma único forçado.** Vem
+  direto do relato dela: "eu quero falar em portugues e inglês, e
+  aparetmente só funciona ingles". Causa real, achada testando: com
+  `language=None`, os chunks de 4s (`AudioStream.chunks()`) às vezes
+  são CURTOS DEMAIS pra detecção de idioma do Whisper ser confiável —
+  limitação documentada do próprio modelo (viés conhecido pra inglês
+  em áudio curto/ambíguo), não bug daqui. E o detalhe que torna isso
+  grave: o Whisper transcreve NO idioma que ele achou, então detecção
+  errada vira TEXTO errado, não só rótulo errado — português falado
+  sai como inglês inventado. As três formas, todas configuráveis por
+  `setup_visper.py` sem abrir arquivo `.py`:
+  - **um idioma só** (`["pt"]`) — pula a adivinhação por completo,
+    é o mais confiável de todos;
+  - **vários** (`["pt", "en"]`, o padrão) — deixa detectar, mas SÓ
+    aceita o palpite se ele estiver na lista E vier com confiança
+    `>= config.LANGUAGE_CONFIDENCE_THRESHOLD` (0.5); senão
+    RE-TRANSCREVE forçando o último idioma que passou nesse crivo
+    (`self._last_good_language`), caindo no primeiro da lista se
+    ainda não houve nenhum. Re-transcrever custa um segundo passe no
+    MESMO chunk já em memória — barato perto de mandar texto errado
+    pro chat;
+  - **lista vazia** (`[]`, "auto") — sem restrição, aceita o erro de
+    detecção junto.
+  Pra diagnosticar sem precisar adivinhar: o idioma aparece no
+  "Heard:" (`"[pt] oi tudo bem"`), e quando houve correção ele mostra
+  as duas pontas (`"[en→pt] ..."`) — separa "o Whisper não ouviu" de
+  "ouviu certo mas cravou o idioma errado" de "cravou errado e eu
+  corrigi".
 - **iPhone precisa ser um app separado que aciona o Mac, não que
   repete a automação sozinho** — iOS não deixa um app simular teclado
   dentro de outro app (sandbox). Não existe "AppleScript do iOS".
@@ -165,6 +194,78 @@ não bug daqui).
   que são comuns em qualquer ditado em inglês. `text_utils.py`
   também dobra acento (câmbio/cambio contam igual), pra tolerar o
   Whisper transcrever com ou sem acento.
+- **Cancelar exige ADJACÊNCIA à wake word ("vIsper, cancela"), não só
+  a palavra em algum lugar do trecho.** O ditado só tinha uma saída, e
+  ela era a destrutiva: mandar. Transcrição erra, então precisava
+  existir um jeito de desistir sem matar o app —
+  `config.CANCEL_TRIGGERS` (`cancela`, `cancelar`, `cancel`,
+  `esquece`, `forget it`) resolvido por
+  `dictation._is_cancel()`. Mas essas palavras são o OPOSTO de
+  "câmbio"/"over": são comuns em fala normal. Bastar a palavra em
+  qualquer lugar do trecho faria "preciso cancelar a reserva, vIsper"
+  (fechar um ditado que por acaso fala em cancelar) APAGAR tudo em vez
+  de mandar — o oposto exato do pedido, e irreversível. Por isso a
+  regra é `text_utils.starts_with_word()` sobre o que vem DEPOIS da
+  wake word: essa frase manda normalmente, e só o comando de verdade
+  cancela. Dois detalhes que não podem ser mexidos sem repensar tudo:
+  (a) o cancelamento é checado ANTES do fechamento, nas DUAS pontas
+  (no trecho que fecha e no `leftover` do que abre) — "vIsper cancela"
+  contém a wake word, que também é gatilho de fechamento, então na
+  ordem errada pedir pra cancelar MANDARIA; (b) o som do cancelamento
+  (`config.DICTATION_CANCEL_SOUND`, callback `on_cancel`) é DIFERENTE
+  do de mandar de propósito — sem sinal distinto não dá pra saber se o
+  texto foi embora ou foi descartado, que é justamente a dúvida que o
+  cancelamento existe pra tirar. Casamento EXATO, sem tolerância a
+  erro de transcrição, mesma regra do fechamento e pelo mesmo motivo:
+  os dois desfechos são irreversíveis.
+
+- **"Recent activity…": as últimas 25 linhas de "ouvi X / decidi Y",
+  só na MEMÓRIA.** O "Heard:" do menu responde "ele está me ouvindo
+  agora?", mas não responde a pergunta que aparece de verdade num teste
+  real: "falei o comando faz 30 segundos e não aconteceu nada — o que
+  ele entendeu?". Quando ela abre o menu pra olhar, o trecho que
+  interessa já foi sobrescrito (chega um novo a cada ~4s) e cortado em
+  45 caracteres — justamente o fim da frase, que é onde mora o gatilho
+  de fechamento. E o outro retorno, `notify()`, some em segundos e é
+  no-op rodando por `python3 main.py`. Ou seja: no momento do
+  diagnóstico não sobrava evidência nenhuma — foi exatamente a situação
+  que produziu "nao funciou o comando de voz" sem mais detalhe, e
+  custou uma ida e volta inteira pra descobrir a causa. Duas metades
+  são guardadas SEPARADAS, o que foi OUVIDO e o que foi DECIDIDO,
+  porque a falha mais comum é as duas não combinarem (ouviu certo e
+  roteou errado, ou não ouviu). **Nunca em disco, de propósito**: o app
+  escuta o tempo todo, então gravar transcrição em arquivo seria uma
+  mudança de privacidade que ninguém pediu — e é desnecessária, já que
+  a dúvida é sempre sobre o passado recente. `deque(maxlen=...)` sem
+  lock: append/list são atômicos no CPython, o pior caso é uma linha
+  fora de ordem (irrelevante pra diagnóstico) e segurar lock dentro do
+  laço de transcrição seria pior. O teto é BAIXO (25) porque a janela é
+  um `NSAlert` (`rumps.alert()`), que cresce junto com o texto e não
+  rola — 40 linhas compridas renderiam um alerta mais alto que a tela,
+  inútil justamente na hora de ler. E linha comprida é encurtada NO
+  MEIO, nunca no fim (`_elide()`): as duas pontas de uma linha `heard`
+  são os dois pontos de diagnóstico — a wake word abre a frase, o
+  gatilho de fechamento ("over"/"câmbio") fecha —, então cortar o fim
+  jogaria fora justamente a metade que explica por que o ditado não foi
+  mandado. `_log_activity()` NÃO passa por
+  `AppHelper.callAfter` — a regra da thread principal vale pra mutação
+  de UI, e aqui não há nenhuma. Trecho silencioso não entra (senão o
+  silêncio consumiria as 25 linhas e empurraria pra fora justamente o
+  comando que falhou). 11 testes.
+- **Toda string que `DictationSession.handle()` devolve é UI de
+  produto, então está em INGLÊS.** Elas iam direto pro `notify()` (uma
+  notificação do macOS — interface, não log interno) e agora aparecem
+  também em "Recent activity…", mas estavam em português: "abriu
+  claude — ouvindo ditado", "ditando…", "mandou: …". Contrariava a
+  decisão de UI em inglês registrada aqui, e era o único lugar do app
+  onde isso ainda acontecia. A tradução consertou junto uma ambiguidade
+  real criada quando "vIsper, cancela" foi acrescentado: DOIS desfechos
+  diferentes diziam "cancelado" — o cancelamento de verdade e o
+  fechamento sem nada no buffer. Hoje são `"cancelled — …"` e
+  `"nothing to send — the dictation was empty"`, que é a diferença que
+  importa (um jogou fora o que você ditou; o outro não tinha nada pra
+  jogar). Os marcadores dos testes (`"abriu_claude"`, `"mandou_enter"`)
+  continuam em português de propósito — são fixture de teste, não UI.
 
 - **Configuração pessoal mora FORA do repositório**
   (`user_settings.py` → `~/Library/Application Support/vIsper/settings.json`).
@@ -182,15 +283,77 @@ não bug daqui).
   `config.py`. Efeito colateral que resolve o pedido de distribuir pra
   outras pessoas: cada uma tem a sua config, e `git pull` nunca
   conflita com ela.
-- **O ícone da barra de menu É o estado** (`main.STATE_GLYPHS`:
-  ⏳ carregando, 🎙 parado, 🟢 escutando, 🔴 ditando, 🔵 mandou,
-  🟠 erro). Antes o título era fixo e o único retorno era notificação,
-  que some sozinha em segundos — não dava pra responder a pergunta mais
-  básica ("ele está me ouvindo agora?") sem falar uma frase de teste e
-  torcer. As cores são as MESMAS da paleta semântica do
-  `design/layouts_mockup.html`. Bolinha colorida em vez de imagem
-  template porque lê bem no tamanho da barra, funciona igual em modo
-  claro/escuro, e não vira mais um arquivo pro py2app empacotar.
+- **O ícone da barra de menu É o estado** (`main.STATUS_ICONS`:
+  carregando/parado/escutando/ditando/mandou/erro). Antes o título era
+  fixo e o único retorno era notificação, que some sozinha em segundos
+  — não dava pra responder a pergunta mais básica ("ele está me
+  ouvindo agora?") sem falar uma frase de teste e torcer.
+  **Já passou por TRÊS versões, e cada uma consertou o que a anterior
+  quebrou — a lição que vale registrar é que FORMA e COR são dois
+  eixos separados e acertar um não vale sacrificar o outro:**
+  (1) EMOJI (⏳🎙🟢🔴🔵🟠) como texto do título — funcionava, mas a
+  Valeta testou de verdade e apontou que "as cores que você falou não
+  estão funcionando": emoji usa as cores do FONTE da Apple, não as da
+  paleta semântica documentada (🟠 não é terracota; 🎙 não tem cor de
+  estado nenhuma). (2) CÍRCULO colorido sólido — cor certa, mas jogou
+  a identidade fora, e a resposta dela foi "os ícones deveriam seguir
+  o briefing inicial". (3) A SILHUETA DO MASCOTE na cor do estado
+  (atual): a forma é a MESMA de `design/menubar_icon_template.svg` (o
+  briefing) e nunca muda, porque é o que identifica o vIsper na
+  barra; a cor é a paleta semântica, e é só ela que muda com o estado.
+  Os PNGs (`status_icons/*.png`) saem de
+  `design/generate_status_icons.py`, escrito com zlib+struct puro —
+  sem Pillow, sem cairosvg, sem dependência nova só pra 6 imagens
+  pequenas. Como não dá pra "importar" um SVG sem dependência, as
+  primitivas do briefing estão TRANSCRITAS em `SHAPES` com os números
+  literais do arquivo (mexeu no SVG, mexe lá e rode de novo), e são
+  rasterizadas por distância com sinal — é o que dá antialiasing de
+  graça sem biblioteca gráfica. `test_status_icons.py` fecha os dois
+  círculos contra os BYTES do PNG: a cor contra o hex de
+  `layouts_mockup.html`, e pontos do desenho contra a geometria de
+  `menubar_icon_template.svg` — inclusive o VÃO entre as duas antenas,
+  que é justamente o ponto onde um círculo teria tinta e o mascote
+  não tem. O PNG precisa ser QUADRADO: o rumps fixa a imagem em 20×20
+  pontos (`image.setSize_((20, 20))`, sem como passar outro valor pela
+  propriedade `.icon`), então imagem não-quadrada sairia espremida. **Sem `template=True`** (rumps.App.icon,
+  parâmetro `template`) de propósito: template forçaria monocromático
+  conforme claro/escuro, apagando a cor de novo pelo mesmo motivo do
+  emoji, só que por outro caminho — conferido no source do rumps
+  0.4.0 (`_nsimage_from_file`, `image.setTemplate_`), não de memória.
+  `setup.py` leva `status_icons/` pro bundle via `DATA_FILES`
+  explícito — carregado por CAMINHO de arquivo (`rumps.App.icon`
+  exige path, não aceita bytes/NSImage direto), então py2app não
+  rastreia essa dependência sozinho só seguindo imports.
+- **Toda mutação de AppKit vinda de thread de FUNDO passa por
+  `AppHelper.callAfter`** (`PyObjCTools.AppHelper`, já vem com
+  `pyobjc-framework-Cocoa` — dependência do próprio rumps, nada novo
+  pra instalar). **Crash real, achado testando de verdade** (não
+  suposição): `EXC_BREAKPOINT`/`SIGTRAP`, "Must only be used from the
+  main thread", bem no meio de `popUpStatusBarMenu` — a Valeta tinha o
+  menu ABERTO no exato momento em que uma thread de fundo
+  (`_load_model`, `_listen_loop_*`, ou `_on_result` vindo do relay do
+  iPhone) tentava trocar o ícone ou o texto do "Heard:". AppKit não é
+  thread-safe pra mutação de UI — regra do próprio Apple, não bug do
+  rumps nem do PyObjC. Sistemática: qualquer `self.icon = ...`,
+  `self.<MenuItem>.title = ...`, ou `rumps.alert()` (cria `NSAlert` e
+  chama `runModal()` — MESMA exigência de main thread, achado
+  revendo TODOS os call sites depois do crash, não só o que apareceu
+  no relatório) chamado de fora de um `@rumps.clicked` (que já roda na
+  main thread) PRECISA passar por `AppHelper.callAfter`.
+  `rumps.notification()` é a ÚNICA exceção conferida — usa
+  `NSUserNotificationCenter`, que a Apple documenta como thread-safe
+  pra postar (`notify()` continua chamado direto de qualquer thread).
+  Rastreamos o estado LÓGICO num atributo Python simples
+  (`self._current_state`, atualizado SINCRONAMENTE) em vez de reler
+  `self.icon`/`self.title` depois de mudar: a mutação real do AppKit
+  via `callAfter` é ASSÍNCRONA (só acontece no próximo ciclo do
+  runloop principal), então reler a propriedade logo em seguida podia
+  pegar o valor ANTIGO — foi exatamente esse padrão que
+  `_on_result()` usava antes (`self.title != STATE_GLYPHS["sent"]`) e
+  precisou ser trocado. Dublê de teste (`test_main.py`,
+  `PyObjCTools.AppHelper` fake) executa o callback NA HORA — suficiente
+  pra testar o QUE seria chamado e COM QUE argumento, mas a entrega
+  assíncrona de verdade continua só validável num Mac.
 - **O modelo do Whisper carrega em THREAD, nunca no `__init__`.**
   São ~150 MB baixados na primeira execução: no `__init__` o app ficava
   minutos sem ícone nenhum, e qualquer falha matava o processo ANTES do
@@ -232,6 +395,38 @@ não bug daqui).
   empacotamento roda num macOS real, e o smoke test (abre o bundle,
   confere que sobrevive 20s) pega justamente a falha silenciosa do
   py2app quando falta lib nativa.
+- **No iPhone, o que dispara o envio automático é OCIOSIDADE de
+  digitação, não o fim do reconhecimento de voz.** Pedido literal
+  dela: "eu não quero ter que apertar enviar para o mac". A primeira
+  versão só mandava sozinho no `onend` do Web Speech API — e o Web
+  Speech API é justamente a peça que NÃO dá pra contar no iOS: quando
+  ele falta, `speechSupported()` desabilita o botão de microfone e
+  sobrava digitar + apertar "Send to Mac" na mão, exatamente o toque
+  que não deveria existir. Hoje qualquer evento `input` no campo (a
+  tecla de MICROFONE do teclado do próprio iPhone dispara esse evento
+  igual a digitar) arma um timer de `IDLE_MS = 2500`; parou de mexer,
+  começa a MESMA contagem de 3s com a MESMA janela de cancelamento.
+  Total: 5,5s de silêncio antes de sair. Três regras que vieram de
+  pensar nos casos ruins: (a) mexer no texto durante a contagem
+  cancela E rearma — senão "corrigi uma letra" viraria "agora tem que
+  apertar enviar na mão"; (b) cancelar DE PROPÓSITO (tocar no botão,
+  que durante a contagem vira "Tap to cancel") desarma a ociosidade
+  também, senão a contagem voltaria sozinha em 2,5s e o toque não
+  teria servido pra nada; (c) desligar o ajuste nas configurações
+  desarma o que já estava armado, não só o próximo.
+- **Bug real achado por causa disso, que vale registrar: `hidden` é
+  propriedade de `HTMLElement`, e `SVGElement` NÃO herda dela.**
+  `ring.hidden = false` (o anel de contagem é um `<svg>`) só criava
+  uma propriedade JS solta — o atributo `hidden` continuava no
+  elemento, e a regra `.countdown svg.ring[hidden] { display: none }`
+  mantinha o anel invisível DURANTE a contagem inteira. Ou seja: o
+  único sinal visual de "vai mandar, toca pra cancelar" nunca
+  apareceu. É a SEGUNDA mordida do mesmo detalhe de SVG — aquela
+  regra de CSS existe justamente porque `hidden` não esconde SVG
+  sozinho. Hoje usa `removeAttribute`/`setAttribute`, e
+  `test_pwa.js` checa a visibilidade real do anel nos dois estados.
+  Confirmado rodando no Chromium (`typeof svg.hidden === "undefined"`,
+  `'hidden' in SVGElement.prototype === false`), não de memória.
 - **O app de iPhone é um PWA no GitHub Pages (`docs/`), não Swift.**
   iOS não instala app de arquivo; com conta grátis de desenvolvedor o
   app EXPIRA EM 7 DIAS, com conta paga são US$99/ano — as duas
@@ -300,7 +495,9 @@ Módulos principais (mic local, sempre ativos):
     `_fold_with_index_map()` guarda, pra cada caractere do texto
     dobrado, de qual posição do original ele veio — **qualquer função
     nova que ache posição no dobrado e fatie o original TEM que usar
-    esse mapa**. 35 testes.
+    esse mapa**. `starts_with_word()` é a mais nova, e existe só pra
+    o cancelamento poder exigir ADJACÊNCIA à wake word — ver a
+    decisão sobre cancelar acima. 55 testes.
 - `audio_input.py` — lista/detecta microfones (`guess_preferred_device()`,
   `classify_device()`, orientados por `config.PREFERRED_INPUT_DEVICES` —
   casamento por SUBSTRING simples, não palavra inteira, porque nome de
@@ -341,7 +538,7 @@ Módulos principais (mic local, sempre ativos):
   tratar o retorno como string. A escolha da IA é por POSIÇÃO do
   apelido na fala (mais cedo ganha), com desempate por comprimento —
   ver o raciocínio e o bug que motivou cada metade em "Decisões de
-  arquitetura". 13 testes dedicados.
+  arquitetura". 24 testes dedicados.
 - `dictation.py` — a máquina de estados ocioso/ditando. Fecha com a
   wake word OU qualquer `CLOSE_TRIGGERS`. A mensagem final é o BUFFER
   INTERNO (populado por chamadas anteriores de `.handle()`) **mais**
@@ -362,10 +559,11 @@ Módulos principais (mic local, sempre ativos):
   agora é que o texto da chamada que ABRE e o texto da chamada que
   FECHA podem os dois ter conteúdo real misturado com o gatilho — e
   podem até ser a MESMA chamada —, não só as chamadas do meio.
-  `DictationSession` aceita `on_open`/`on_send` opcionais (callbacks
-  sem argumento, só feedback — não afetam a máquina de estados;
-  `on_send` NÃO dispara no caso "cancelado"), usados por `main.py` pra
-  tocar o earcon. 22 testes dedicados.
+  `DictationSession` aceita `on_open`/`on_send`/`on_cancel`
+  opcionais (callbacks sem argumento, só feedback — não afetam a
+  máquina de estados; `on_send` NÃO dispara quando o fechamento não
+  tinha nada pra mandar), usados por `main.py` pra tocar o earcon.
+  33 testes dedicados.
 - `actions.py` — as ações de verdade (abrir app/URL, colar texto,
   apertar Enter) via `subprocess`/`osascript`. Todo `subprocess.run()`
   usa `check=True` — antes, uma falha (ex.: permissão de
@@ -375,7 +573,7 @@ Módulos principais (mic local, sempre ativos):
   `main._listen_loop_safe` e avisado por notificação. `play_sound()` é
   a exceção de propósito: usa `Popen` (não-blocking) e ENGOLE falha —
   é earcon (`config.DICTATION_OPEN_SOUND`/`DICTATION_SEND_SOUND`), não
-  pode travar o loop de ditado nem parecer que a ação real falhou. 12
+  pode travar o loop de ditado nem parecer que a ação real falhou. 18
   testes (`test_actions.py`, mockando `subprocess.run`/`Popen` —
   primeira cobertura deste arquivo).
 - `main.py` — o app de barra de menu (rumps). Escolhe automaticamente
@@ -407,7 +605,27 @@ Módulos principais (mic local, sempre ativos):
   alimentando o mesmo `DictationSession`. Thread de escuta envolvida
   em try/except (`_listen_loop_safe`) — sem isso, stream falhando ao
   abrir (ex.: fone Bluetooth desconectou) travava `self.listening=True`
-  pra sempre, exigindo reiniciar o app. 12 testes
+  pra sempre, exigindo reiniciar o app. **Wake word, idiomas e tópico
+  do iPhone se ajustam pelo MENU** ("Wake word…", "Spoken languages…",
+  "iPhone connection…", todos por `_ask()` → `rumps.Window`), não só
+  pelo `setup_visper.py` — quem instalou pelo `.dmg` não tem o
+  repositório nem o script na máquina, e mandar essa pessoa editar o
+  `config.py` é exatamente o atrito que o `.dmg` existe pra tirar.
+  Idioma vale NA HORA (`_apply_languages()`, chamado tanto pelo
+  `__init__` quanto pelo menu — as três derivadas mudam juntas); wake
+  word exige reabrir, porque `dictation.py`/`command_router.py` leem
+  `WAKE_WORD` uma vez na importação. **"Recent activity…"** mostra as
+  últimas 25 linhas de "ouvi X / decidi Y" (`_log_activity()`,
+  `_history`) — é a ferramenta de diagnóstico do teste manual, ver a
+  decisão sobre ela acima. O estado "mandou" é um
+  FLASH (`_flash_state`, ~2,5s) e não um estado fixo: mandar é um
+  evento e a escuta continua, então o azul ficava respondendo ERRADO
+  a única pergunta que o ícone existe pra responder ("ele está me
+  ouvindo agora?") até acontecer outra coisa — podiam ser minutos. O
+  timer relê `_current_state` na hora de voltar em vez de capturar o
+  estado de antes: entre o flash e o disparo dá tempo de parar a
+  escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
+  desfeito por um timer velho. 80 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -461,7 +679,7 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   validador por chave (`VALIDATORS`). Valor inválido cai SOZINHO, sem
   levar o arquivo junto. `settings_path()` respeita a env var
   `VISPER_SETTINGS_PATH`, que é como os testes nunca tocam no arquivo
-  real. 21 testes.
+  real. 30 testes.
 - `setup_visper.py` — assistente de primeira configuração. Só
   biblioteca padrão de propósito: a primeira coisa que a pessoa faz é
   ANTES de instalar qualquer dependência. Sorteia o tópico, e no fim
@@ -479,9 +697,11 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   `localStorage`; monta `"<wake> <ia> <texto> over"` numa string só,
   caindo no caminho abre-e-fecha-no-mesmo-trecho de `dictation.py`.
   Envio automático com 3s de janela pra cancelar (transcrição erra;
-  mandar errado é pior que um toque a mais). Corpo de texto puro no
-  POST de propósito — requisição simples, sem preflight CORS.
-- `test_pwa.js` — 25 testes do PWA num Chromium DE VERDADE
+  mandar errado é pior que um toque a mais). **O automático NÃO
+  depende do Web Speech API** — ver a decisão de arquitetura sobre
+  isso logo abaixo. Corpo de texto puro no POST de propósito —
+  requisição simples, sem preflight CORS.
+- `test_pwa.js` — 39 testes do PWA num Chromium DE VERDADE
   (Playwright), rodando no CI. **A peça mais validada do projeto** — a
   única testada em runtime real em vez de mocks. Achou dois defeitos
   visuais que nenhuma leitura de código teria pego: o `hidden` não
@@ -500,7 +720,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 244 testes no total. Rodar com:
+- `test_*.py` — 319 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -663,7 +883,14 @@ mudar bastante antes de virar assets de produção.
    (o Porcupine já detectou a wake word pelo SOM); e mexer neles
    quebraria os dublês de modelo dos testes, que fixam a assinatura
    `transcribe(audio, language=None)`.
-11. Chunks de 4s sem sobreposição (`audio_input.AudioStream.chunks()`):
+11. **"vIsper, cancela" não funciona no modo Porcupine.** Lá a wake
+   word FECHA o ditado no instante em que o Porcupine a reconhece
+   acusticamente — a palavra "cancela" vem depois disso e nunca chega
+   a ser capturada, então o ditado já foi mandado. É inerente a fechar
+   por detecção acústica, não um descuido: o modo Whisper contínuo (o
+   padrão) transcreve o trecho inteiro antes de decidir, e é por isso
+   que só nele dá pra distinguir "fecha" de "cancela".
+12. Chunks de 4s sem sobreposição (`audio_input.AudioStream.chunks()`):
    uma palavra cortada exatamente na fronteira entre dois chunks pode
    não casar com nenhum gatilho. Conhecido, não corrigido — a correção
    (janela deslizante) muda o contrato de todo mundo que consome
@@ -680,8 +907,17 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
   Então: a lista `PACKAGES`, o `user_settings` no bundle, e a cópia do
   libportaudio estão corretos. O que continua não validado é o
   comportamento COM microfone e COM permissões concedidas.
-- **O app de iPhone funciona num navegador real** (25 testes,
+- **O app de iPhone funciona num navegador real** (39 testes,
   `test_pwa.js`, no CI a cada push).
+- **`python3 main.py` roda de verdade num Mac** — a Valeta testou.
+  Ícone aparece, escuta liga, permissões de Microfone/Acessibilidade
+  funcionam, o modelo baixa e carrega. Achou (e já está corrigido) o
+  crash real de thread documentado em "Decisões de arquitetura"
+  (`AppHelper.callAfter`) e o bug do `mic_menu.clear()` (ver histórico
+  de commits) — os dois só apareceram rodando de verdade, nenhum dos
+  dois foi pego só lendo código. O que continua sem validação completa
+  de ponta a ponta: uma sessão inteira sem crash (abrir → ditar →
+  mandar, repetido), e o Porcupine com hardware real.
 
 ## Próximos passos, em ordem de prioridade
 
@@ -695,10 +931,32 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
    (ver README) — confirmar que aparece e que o áudio do sistema
    realmente degrada como esperado, já que isso nunca foi ouvido de
    verdade, só deduzido de como o Bluetooth clássico funciona. Testar
-   também: os earcons tocando nos momentos certos (abrir/mandar, não
-   ao cancelar), e a persistência de escolha manual sobrevivendo a um
-   `python3 main.py` novo (escolher o Sony, fechar o app, abrir de
-   novo, conferir que já veio marcado sem precisar escolher de novo).
+   também: os earcons tocando nos momentos certos (abrir/mandar/
+   cancelar — os três sons são diferentes de propósito), e a
+   persistência de escolha manual sobrevivendo a um `python3 main.py`
+   novo (escolher o Sony, fechar o app, abrir de novo, conferir que já
+   veio marcado sem precisar escolher de novo). O que mudou desde o
+   último teste dela e precisa de olhar específico:
+   - **falar português E inglês** na mesma sessão, conferindo o
+     `[pt]`/`[en]` no "Heard:" — e se aparecer `[en→pt]`, isso é a
+     correção funcionando, não um erro;
+   - **os ícones**: são a silhueta do mascote agora, e o azul de
+     "mandou" tem que voltar pro verde sozinho em ~2s;
+   - **"vIsper, cancela"**: descarta o ditado, som DIFERENTE do de
+     mandar, e nada é colado;
+   - **os ajustes pelo menu** ("Wake word…", "Spoken languages…") —
+     conferir principalmente que trocar o idioma vale na hora, sem
+     reabrir o app;
+   - **no iPhone**: ditar pela tecla de microfone do TECLADO (não pelo
+     botão do app) e não encostar em mais nada — tem que mandar
+     sozinho depois de uns segundos.
+   - **"Recent activity…"** é o que usar quando algo NÃO funcionar:
+     em vez de tentar de novo e torcer, abrir ali e comparar as duas
+     colunas — se o `heard` mostrar a frase certa mas não houver `→`
+     nenhum, o problema é o casamento do gatilho; se o `heard` já vier
+     torto, é transcrição (ou idioma); se não houver linha nenhuma, o
+     áudio não está chegando. Vale mandar print disso junto de
+     qualquer relato de bug — é o que faltou da última vez.
 2. Depois do item 1 validado manualmente por uns dias: configurar o
    LaunchAgent (`launchd/com.valeta.visper.plist`, ver README) —
    confirmar que o ícone aparece sozinho no login, que "Sair" não
@@ -726,13 +984,13 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
 
 A Valeta decide o que vale a pena construir — isso é só uma lista de
 ideias que surgiram, não um compromisso:
-- Feedback VISUAL (o mascote mudando de estado na barra de menu) —
-  o sonoro já existe (earcon em `config.DICTATION_*_SOUND`, ver
-  abaixo), mas continua sem nada visual além do texto do submenu.
-- Palavra de cancelar (ex. "vIsper, cancela") pra descartar o ditado
-  em vez de mandar.
-- Envio automático depois de alguns segundos de silêncio, como rede
-  de segurança pra quando esquecer de repetir a wake word.
+- Envio automático depois de alguns segundos de silêncio NO MAC,
+  como rede de segurança pra quando esquecer de repetir a wake word.
+  **Já existe no iPhone** (o PWA arma `IDLE_MS` a cada digitação e
+  cai na mesma janela de cancelamento), mas no Mac é bem mais
+  arriscado: lá o microfone fica aberto o tempo todo, então "parou de
+  falar" acontece o tempo todo sem querer dizer "terminei". Precisaria
+  ser opt-in e provavelmente com janela de cancelamento maior.
 - Comando que manda direto o que já está copiado (pula o ditado).
 - Apple Watch: o mesmo App Intent do iPhone, disparável pelo relógio
   — combina com o caso de uso do treino.

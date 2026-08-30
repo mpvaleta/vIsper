@@ -26,12 +26,20 @@ pedia permissão era o Terminal; num .app é o próprio .app — por isso
 elas só passam a ser obrigatórias aqui.
 """
 
+import glob
 import os
 import sys
 
 from setuptools import setup
 
 APP = ["main.py"]
+
+# Os 6 círculos coloridos da barra de menu (ver design/generate_status_icons.py
+# e main.py, STATUS_ICONS) — precisam ir pro bundle EXPLICITAMENTE via
+# DATA_FILES: são carregados por CAMINHO de arquivo em runtime
+# (rumps.App.icon exige um path, não aceita bytes/NSImage direto), então
+# py2app não tem como descobrir essa dependência sozinho só seguindo imports.
+STATUS_ICONS = sorted(glob.glob("status_icons/*.png"))
 
 
 def _portaudio_dylib():
@@ -106,6 +114,13 @@ PACKAGES = [
 
 FRAMEWORKS = [caminho for caminho in [_portaudio_dylib()] if caminho]
 
+# ("status_icons", [...]) copia os PNGs pra Contents/Resources/status_icons/
+# — o MESMO caminho relativo (status_icons/ ao lado de main.py) que
+# main.py usa rodando direto do código, porque py2app também copia
+# main.py pra dentro de Contents/Resources/. Um só código de resolução
+# de caminho serve pros dois casos.
+DATA_FILES = [("status_icons", STATUS_ICONS)] if STATUS_ICONS else []
+
 OPTIONS = {
     # NUNCA True: argv_emulation depende do Carbon, que não existe mais
     # em macOS 64-bit — trava o app na abertura. O vIsper não recebe
@@ -141,6 +156,7 @@ OPTIONS = {
 setup(
     name="vIsper",
     app=APP,
+    data_files=DATA_FILES,
     options={"py2app": OPTIONS},
     setup_requires=["py2app"],
 )

@@ -152,6 +152,25 @@ def find_word(haystack: str, word: str):
     return match.start() if match else None
 
 
+def starts_with_word(haystack: str, word: str) -> bool:
+    """
+    True se `haystack` COMEÇA com `word` como palavra (ou frase)
+    inteira. Ignora maiúscula/minúscula, acento e pontuação/espaço
+    antes da palavra.
+
+    Diferente de contains_word() de propósito, e a diferença é o que
+    torna o cancelamento seguro: "cancela" pode aparecer em qualquer
+    lugar de uma frase ditada de verdade ("preciso cancelar a
+    reserva"), então só ADJACÊNCIA à wake word — "vIsper, cancela",
+    nessa ordem, coladas — distingue um comando de uma frase. Ver
+    dictation._is_cancel() e config.CANCEL_TRIGGERS.
+    """
+    if not word:
+        return False
+    inicio = _strip_edges(_fold_for_match(haystack), right=False)
+    return re.match(_word_pattern(_fold_for_match(word)), inicio) is not None
+
+
 def split_after_word(haystack: str, word: str) -> str:
     """
     Retorna o que vem depois da PRIMEIRA ocorrência de `word` como

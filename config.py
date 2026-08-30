@@ -60,6 +60,25 @@ AI_TRIGGERS = {
 # então "over" não confunde com "however"/"moreover"/"cover".
 CLOSE_TRIGGERS = ["câmbio", "over"]
 
+# Como DESISTIR de um ditado em vez de mandar — a saída de emergência
+# pra quando a transcrição saiu errada e você percebeu antes de fechar.
+# Sem isso o ditado só tinha uma saída, e ela era a destrutiva: mandar.
+#
+# Só vale LOGO DEPOIS da wake word: "vIsper, cancela", nessa ordem e
+# coladas. Isso não é preciosismo — "cancela"/"cancel" são palavras
+# normais do dia a dia (ao contrário de "câmbio"/"over"), então bastar
+# a palavra em qualquer lugar do trecho faria "preciso cancelar a
+# reserva, vIsper" (fechar um ditado que por acaso falava em cancelar)
+# apagar tudo em vez de mandar. Com a adjacência, essa frase manda
+# normalmente e só o comando de verdade cancela.
+#
+# Casam como PALAVRA INTEIRA (ver text_utils.py) e SEM tolerância a
+# erro de transcrição — mesma regra do fechamento, e pelo mesmo
+# motivo: os dois desfechos são irreversíveis (um manda, o outro
+# apaga), então na dúvida é melhor não fazer nada e esperar você
+# repetir.
+CANCEL_TRIGGERS = ["cancela", "cancelar", "cancel", "esquece", "forget it"]
+
 # Tópico do ntfy (https://ntfy.sh) que o app de iPhone usa pra mandar
 # comando pro Mac de qualquer lugar (não só na mesma Wi-Fi) — ver
 # relay_listener.py.
@@ -79,6 +98,46 @@ CLOSE_TRIGGERS = ["câmbio", "over"]
 # setup_visper.py de novo pra sortear outro — é instantâneo, e o
 # antigo deixa de valer.
 NTFY_TOPIC = ""
+
+# Os idiomas que VOCÊ fala. O vIsper nunca vai transcrever em nada
+# fora desta lista.
+#
+# O problema que isso resolve: deixar o Whisper detectar o idioma
+# livremente a cada trecho de ~4s não funciona bem, porque detecção de
+# idioma em ÁUDIO CURTO é conhecidamente pouco confiável (limitação
+# documentada do modelo, não bug daqui). Na prática ele "chuta" inglês
+# com frequência ouvindo português — e às vezes chuta idiomas que você
+# nem fala. Como o texto sai transcrito NAQUELE idioma, o resultado
+# vira letra errada, não só rótulo errado.
+#
+# Como cada tamanho de lista se comporta:
+#   ["pt"]        -> força português; pula a detecção por completo.
+#                    Mais rápido e mais confiável — use se você dita
+#                    só num idioma.
+#   ["pt", "en"]  -> detecta, mas só ACEITA se cair em pt ou en com
+#                    confiança suficiente (ver abaixo). Se a detecção
+#                    sair da lista ou vier insegura, refaz o trecho no
+#                    último idioma que deu certo. É o que permite
+#                    alternar entre os dois sem perder confiabilidade.
+#   []            -> sem restrição nenhuma (comportamento cru do
+#                    Whisper). Só faz sentido se você fala vários
+#                    idiomas que mudam com frequência — e aí você
+#                    aceita o erro de detecção junto.
+#
+# Códigos: https://github.com/openai/whisper#available-models-and-languages
+# `python3 setup_visper.py` pergunta isso e escreve aqui pra você.
+TRANSCRIPTION_LANGUAGES = ["pt", "en"]
+
+# Confiança mínima (0..1) pra aceitar um idioma detectado quando
+# TRANSCRIPTION_LANGUAGES tem mais de um. Abaixo disso o trecho é
+# refeito no último idioma que funcionou, em vez de sair transcrito
+# num idioma escolhido no chute.
+#
+# 0.5 é deliberadamente permissivo: refazer custa uma transcrição
+# extra, então só vale a pena quando a detecção está mesmo ruim. Suba
+# (0.7~0.8) se ainda estiver saindo no idioma errado; desça se estiver
+# refazendo demais e ficando lento.
+LANGUAGE_CONFIDENCE_THRESHOLD = 0.5
 
 # Tolerância a erro de transcrição na ABERTURA de comando (wake word e
 # nome da IA). O Whisper erra a grafia de palavra inventada com
@@ -173,6 +232,11 @@ PREFERRED_INPUT_DEVICES = [
 DICTATION_SOUNDS_ENABLED = True
 DICTATION_OPEN_SOUND = "Pop"    # toca quando o ditado ABRE (IA lançada, começou a ouvir)
 DICTATION_SEND_SOUND = "Glass"  # toca quando o ditado FECHA com conteúdo (colou + apertou Enter)
+# Som diferente dos outros dois de propósito: "descartei" precisa ser
+# ouvido como uma coisa DIFERENTE de "mandei", senão você fica sem
+# saber se o texto foi embora ou não — que é justamente a dúvida que
+# o cancelamento existe pra resolver.
+DICTATION_CANCEL_SOUND = "Funk"  # toca quando você cancela o ditado de propósito
 
 
 def transcription_hotwords() -> str:
@@ -195,6 +259,7 @@ def transcription_hotwords() -> str:
     for triggers in AI_TRIGGERS.values():
         words.extend(triggers)
     words.extend(CLOSE_TRIGGERS)
+    words.extend(CANCEL_TRIGGERS)
     # dict.fromkeys: dedup preservando a ordem (wake word primeiro).
     return ", ".join(dict.fromkeys(w for w in words if w))
 

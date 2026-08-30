@@ -81,8 +81,8 @@ class RelayListenerTest(unittest.TestCase):
         self.assertIn("abriu_claude", calls)
         self.assertIn(("colou", "confirma a reuniao de amanha"), calls)
         self.assertIn("mandou_enter", calls)
-        self.assertTrue(any("abriu claude" in r for r in results))
-        self.assertTrue(any(r.startswith("mandou:") for r in results))
+        self.assertTrue(any("opened claude" in r for r in results))
+        self.assertTrue(any(r.startswith("sent:") for r in results))
 
     def test_json_invalido_nao_derruba_a_thread(self):
         calls = []

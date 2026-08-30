@@ -240,3 +240,59 @@ class FuzzyThresholdTest(SettingsTestCase):
             with self.subTest(valor=ruim):
                 self.escrever({"FUZZY_MATCH_THRESHOLD": ruim})
                 self.assertEqual(user_settings.load_settings(), {})
+
+
+class TranscriptionLanguagesTest(SettingsTestCase):
+    """
+    TRANSCRIPTION_LANGUAGES: lista dos idiomas que a pessoa fala — a
+    resposta direta pra "só funciona em inglês", que é o Whisper sendo
+    pouco confiável detectando idioma em áudio CURTO (ver comentário
+    completo em config.py).
+    """
+
+    def test_aceita_um_idioma(self):
+        self.escrever({"TRANSCRIPTION_LANGUAGES": ["pt"]})
+        self.assertEqual(
+            user_settings.load_settings(), {"TRANSCRIPTION_LANGUAGES": ["pt"]}
+        )
+
+    def test_aceita_varios_idiomas(self):
+        self.escrever({"TRANSCRIPTION_LANGUAGES": ["pt", "en"]})
+        self.assertEqual(
+            user_settings.load_settings(), {"TRANSCRIPTION_LANGUAGES": ["pt", "en"]}
+        )
+
+    def test_lista_vazia_e_valida_significa_sem_restricao(self):
+        self.escrever({"TRANSCRIPTION_LANGUAGES": []})
+        self.assertEqual(
+            user_settings.load_settings(), {"TRANSCRIPTION_LANGUAGES": []}
+        )
+
+    def test_rejeita_tipo_errado(self):
+        for ruim in ["pt", 7, None, ["pt", 7], [True]]:
+            with self.subTest(valor=ruim):
+                self.escrever({"TRANSCRIPTION_LANGUAGES": ruim})
+                self.assertEqual(user_settings.load_settings(), {})
+
+    def test_limiar_de_confianca_validado_como_fracao(self):
+        self.escrever({"LANGUAGE_CONFIDENCE_THRESHOLD": 0.7})
+        self.assertEqual(
+            user_settings.load_settings(), {"LANGUAGE_CONFIDENCE_THRESHOLD": 0.7}
+        )
+        for ruim in [-0.1, 1.5, True, "0.7"]:
+            with self.subTest(valor=ruim):
+                self.escrever({"LANGUAGE_CONFIDENCE_THRESHOLD": ruim})
+                self.assertEqual(user_settings.load_settings(), {})
+
+    def test_config_le_os_idiomas_sobrepostos(self):
+        import importlib
+
+        self.escrever({"TRANSCRIPTION_LANGUAGES": ["es"]})
+        import config
+
+        importlib.reload(config)
+        try:
+            self.assertEqual(config.TRANSCRIPTION_LANGUAGES, ["es"])
+        finally:
+            os.environ.pop(user_settings.ENV_OVERRIDE, None)
+            importlib.reload(config)

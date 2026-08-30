@@ -79,6 +79,25 @@ def _is_positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _is_lang_code_list(value):
+    """TRANSCRIPTION_LANGUAGES: lista de códigos curtos ("pt", "en").
+    Lista VAZIA é válida e significa "sem restrição". Não valida contra
+    a lista completa de códigos do Whisper (mudaria a cada versão do
+    modelo), só a FORMA."""
+    return isinstance(value, list) and all(
+        isinstance(v, str) and 2 <= len(v) <= 8 for v in value
+    )
+
+
+def _is_probability(value):
+    """LANGUAGE_CONFIDENCE_THRESHOLD: fração entre 0 e 1."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0.0 <= value <= 1.0
+    )
+
+
 def _is_match_ratio(value):
     """FUZZY_MATCH_THRESHOLD: fração entre 0.5 e 1.0 (1.0 = só exato).
     Abaixo de 0.5 qualquer palavra casa com qualquer outra — isso não é
@@ -128,6 +147,9 @@ VALIDATORS = {
     "PORCUPINE_ACCESS_KEY": _is_str,
     "PORCUPINE_KEYWORD_PATH": _is_str,
     "CLOSE_TRIGGERS": _is_str_list,
+    "CANCEL_TRIGGERS": _is_str_list,
+    "TRANSCRIPTION_LANGUAGES": _is_lang_code_list,
+    "LANGUAGE_CONFIDENCE_THRESHOLD": _is_probability,
     "FUZZY_MATCH_THRESHOLD": _is_match_ratio,
     "RELAY_BLOCKED_AIS": _is_str_list,
     "RELAY_MAX_MESSAGE_CHARS": _is_positive_int,
@@ -136,6 +158,7 @@ VALIDATORS = {
     "DICTATION_SOUNDS_ENABLED": _is_bool,
     "DICTATION_OPEN_SOUND": _is_str,
     "DICTATION_SEND_SOUND": _is_str,
+    "DICTATION_CANCEL_SOUND": _is_str,
 }
 
 

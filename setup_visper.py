@@ -122,9 +122,33 @@ def main():
     if default_ai != config.DEFAULT_AI:
         novos["DEFAULT_AI"] = default_ai
 
+    # -- idiomas da transcrição -----------------------------------------
+    print("─" * 62)
+    print("3) Que idioma(s) VOCÊ fala ao ditar? (separe por vírgula)")
+    print("   O vIsper nunca vai transcrever em nada fora dessa lista.")
+    print()
+    print("   Por que importa: detectar idioma em trechos CURTOS de fala")
+    print("   é pouco confiável, e o Whisper transcreve NO idioma que ele")
+    print("   achou — então detecção errada vira TEXTO errado, não só")
+    print("   rótulo errado. É a causa de 'só funciona em inglês'.")
+    print()
+    print("   'pt'      -> só português: pula a detecção, mais confiável")
+    print("   'pt, en'  -> alterna entre os dois com segurança")
+    print("   'auto'    -> sem restrição (aceita o erro de detecção junto)")
+    atual = ", ".join(config.TRANSCRIPTION_LANGUAGES) or "auto"
+    resposta_idioma = ask("   ", atual).strip().lower()
+    if resposta_idioma in ("auto", "none", ""):
+        novas_linguas = []
+    else:
+        novas_linguas = [
+            parte.strip() for parte in resposta_idioma.split(",") if parte.strip()
+        ]
+    if novas_linguas != list(config.TRANSCRIPTION_LANGUAGES):
+        novos["TRANSCRIPTION_LANGUAGES"] = novas_linguas
+
     # -- ntfy ---------------------------------------------------------
     print("─" * 62)
-    print("3) Usar o iPhone pra disparar comando no Mac de qualquer lugar?")
+    print("4) Usar o iPhone pra disparar comando no Mac de qualquer lugar?")
     print("   (é o que faz funcionar longe de casa, tipo no treino)")
     print()
 
@@ -142,7 +166,7 @@ def main():
 
     # -- Porcupine (opcional) -----------------------------------------
     print("─" * 62)
-    print("4) Wake word acústica (Porcupine)? — opcional, pule se não sabe")
+    print("5) Wake word acústica (Porcupine)? — opcional, pule se não sabe")
     print("   Reconhece o SOM da palavra em vez da transcrição. Precisa de")
     print("   conta grátis em console.picovoice.ai. Sem isso o vIsper usa")
     print("   o modo Whisper contínuo, que já funciona.")
