@@ -426,6 +426,46 @@ class EstadoNaBarraTest(unittest.TestCase):
         app._set_heard("")
         self.assertEqual(app.heard_item.title, "Heard: —")
 
+    def test_fechar_sem_conteudo_pelo_iphone_nao_trava_no_ditando(self):
+        # Bug real: um fechamento sem conteúdo (dictation.py's
+        # _finalize() quando o buffer está vazio) NUNCA chama on_send —
+        # é a única coisa que reverte o ícone além do `elif
+        # self.listening`. Uso só-pelo-iPhone (self.listening False o
+        # tempo todo — o cenário principal do relay, longe de casa)
+        # ficava com o ícone preso em "dictating" pra sempre depois
+        # disso, mesmo com o app inteiramente ocioso.
+        app = _build_app(load_model=True)
+        app.listening = False
+        app._set_state("dictating")
+        app.session.dictating = False  # a sessão já fechou
+
+        app._on_result("opened claude — listening for dictation; nothing to send — the dictation was empty")
+
+        self.assertEqual(app._current_state, "stopped")
+
+    def test_fechar_sem_conteudo_com_a_escuta_local_ligada_volta_pra_escutando(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._set_state("dictating")
+        app.session.dictating = False
+
+        app._on_result("nothing to send — the dictation was empty")
+
+        self.assertEqual(app._current_state, "listening")
+
+    def test_resultado_do_iphone_nao_atropela_o_flash_de_enviado(self):
+        # Uma mensagem SEGUINTE que também fecha (ex.: outra vinda do
+        # iPhone logo em seguida) não pode apagar o flash azul de
+        # "mandou" antes dos ~2,5s — mesma regra que já vale pro mic.
+        app = _build_app(load_model=True)
+        app.listening = True
+        app._set_state("sent")
+        app.session.dictating = False
+
+        app._on_result("nothing to send — the dictation was empty")
+
+        self.assertEqual(app._current_state, "sent")
+
 
 class IconesDeStatusTest(unittest.TestCase):
     """
@@ -1136,6 +1176,34 @@ class HistoricoDeAtividadeTest(unittest.TestCase):
         app.open_activity(None)
         main.rumps.alert.assert_called_once()
         self.assertIn("Nothing yet", main.rumps.alert.call_args[0][1])
+
+    def test_mensagem_do_iphone_entra_no_historico_mesmo_sem_bater_com_nada(self):
+        # O bug que isto fecha: se a wake word do Mac mudar sem
+        # atualizar o link salvo no iPhone, RelayListener nunca chama
+        # on_result (handle_complete devolve None) — sem
+        # _log_relay_received, essa falha não deixava rastro NENHUM em
+        # "Recent activity", justo a ferramenta feita pra diagnosticar
+        # "por que não funcionou".
+        app = _build_app(load_model=True)
+        app._log_relay_received("iris claude oi over")
+        self.assertTrue(any("iris claude oi over" in l for l in app._history))
+        self.assertTrue(any("phone" in l for l in app._history))
+
+
+class RelayDoIphoneTest(unittest.TestCase):
+    def test_relay_e_construido_com_o_log_de_atividade(self):
+        # Sem isto, nenhuma mensagem do iPhone aparecia em "Recent
+        # activity" antes mesmo de saber se ela bateu com algum
+        # gatilho — ver _log_relay_received().
+        with patch.object(main.config, "NTFY_TOPIC", "topico-de-teste-bem-aleatorio"):
+            app = _build_app(load_model=True)
+        self.assertIsNotNone(app.relay)
+        self.assertEqual(app.relay.on_message, app._log_relay_received)
+
+    def test_sem_topico_configurado_o_relay_continua_desligado(self):
+        with patch.object(main.config, "NTFY_TOPIC", ""):
+            app = _build_app(load_model=True)
+        self.assertIsNone(app.relay)
 
 
 if __name__ == "__main__":

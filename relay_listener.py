@@ -49,6 +49,7 @@ class RelayListener:
         server: str = "https://ntfy.sh",
         blocked_ais=None,
         max_chars=None,
+        on_message=None,
     ):
         """
         session: a mesma DictationSession usada pelo áudio local —
@@ -60,6 +61,16 @@ class RelayListener:
                  abrir o Terminal remotamente é execução de comando,
                  não "digitar num chat").
         max_chars: tamanho máximo de uma mensagem aceita.
+        on_message: função opcional(str) -> None, chamada com o texto
+                 BRUTO de toda mensagem recebida, ANTES de qualquer
+                 trava ou tentativa de casar gatilho. Existe pro mesmo
+                 motivo de main._set_heard() no mic: sem isso, uma wake
+                 word desatualizada no telefone (trocada no Mac pelo
+                 menu "Wake word…" sem atualizar o link do iPhone) faz
+                 o roteador não bater com NADA — handle_complete()
+                 devolve None, on_result nunca é chamado — e não sobra
+                 rastro nenhum em "Recent activity", justo a ferramenta
+                 feita pra diagnosticar esse tipo de falha silenciosa.
         """
         self.session = session
         self.topic = topic
@@ -71,16 +82,20 @@ class RelayListener:
         self.max_chars = (
             config.RELAY_MAX_MESSAGE_CHARS if max_chars is None else max_chars
         )
+        self.on_message = on_message
 
     def _handle_message(self, text: str):
         """
         Aplica as travas deste canal e entrega pro DictationSession.
 
-        Devolve o mesmo que session.handle() devolveria, ou uma string
-        explicando a recusa. Recusa RETORNA texto em vez de ficar calada
-        de propósito: uma mensagem sumindo sem explicação é
-        indistinguível de "o relay não está funcionando".
+        Devolve o mesmo que session.handle_complete() devolveria, ou
+        uma string explicando a recusa. Recusa RETORNA texto em vez de
+        ficar calada de propósito: uma mensagem sumindo sem explicação
+        é indistinguível de "o relay não está funcionando".
         """
+        if self.on_message:
+            self.on_message(text)
+
         if len(text) > self.max_chars:
             return (
                 f"ignorado: mensagem grande demais "
@@ -95,7 +110,13 @@ class RelayListener:
             if alvo in self.blocked_ais:
                 return f"ignorado: '{alvo}' não pode ser aberto pelo iPhone"
 
-        return self.session.handle(text)
+        # handle_complete(), não handle(): cada mensagem do relay já
+        # chega INTEIRA (ver a docstring de handle_complete() em
+        # dictation.py pro bug real que essa distinção corrige — texto
+        # contendo "over"/"câmbio" sendo truncado ou descartado só por
+        # causa do sufixo automático que o app de iPhone gruda em toda
+        # mensagem).
+        return self.session.handle_complete(text)
 
     def listen_forever(self, on_result=None):
         """

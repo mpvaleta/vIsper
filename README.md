@@ -188,6 +188,16 @@ obriga a apertar nada. Dá pra desligar tudo isso em **Settings** →
 Instalado pelo `.dmg` e sem Terminal à mão? Dá pra configurar o mesmo
 tópico pelo menu do app: **iPhone connection…**
 
+> **App parece "travado" numa versão antiga, sem o envio automático
+> acima?** O site publicado só atualiza quando uma mudança é mergeada
+> em `main` — pushes numa branch de trabalho podem passar em todo teste
+> e mesmo assim não chegar no link real (a aba **Actions** → workflow
+> **"Publicar o app de iPhone"** mostra se a última execução em `main`
+> ficou verde). Se ficou vermelha ou não rodou depois do último merge,
+> o iPhone ainda está com a versão anterior — recarregue a página no
+> Safari (não só o ícone da Tela de Início) depois que o deploy ficar
+> verde.
+
 Prefere a Siri e o Apple Watch em vez de um ícone? Tem uma receita pro
 app Atalhos em [`ios/ATALHO_IPHONE.md`](ios/ATALHO_IPHONE.md) — funciona
 junto, os dois usam o mesmo tópico.
@@ -459,7 +469,7 @@ Honestidade sobre o que foi validado de verdade:
 | Peça | Como foi validada |
 |---|---|
 | Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 308 testes automatizados |
-| App de iPhone (`docs/`) | 39 testes num navegador de verdade (Chromium), a cada push |
+| App de iPhone (`docs/`) | 39 testes num navegador de verdade (Chromium), a cada push. **O link publicado só atualiza em push pra `main`** — confira a aba Actions se o app parece desatualizado |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |
 | Microfone, permissões do macOS, barra de menu | Já rodou num Mac de verdade (ícone, escuta, permissões, download do modelo). Falta uma sessão inteira de ponta a ponta sem travar |

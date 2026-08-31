@@ -308,7 +308,11 @@ class VisperApp(rumps.App):
         # nunca ficam em estados diferentes.
         self.relay = None
         if config.NTFY_TOPIC:
-            self.relay = RelayListener(self.session, topic=config.NTFY_TOPIC)
+            self.relay = RelayListener(
+                self.session,
+                topic=config.NTFY_TOPIC,
+                on_message=self._log_relay_received,
+            )
             threading.Thread(target=self._relay_loop, daemon=True).start()
 
         # Wake word acústica (opcional) — ver porcupine_session.py.
@@ -421,6 +425,23 @@ class VisperApp(rumps.App):
         curto = self._last_heard[:45] + ("…" if len(self._last_heard) > 45 else "")
         label = f"Heard: {curto}" if curto else "Heard: —"
         AppHelper.callAfter(setattr, self.heard_item, "title", label)
+
+    def _log_relay_received(self, texto):
+        """Guarda no histórico o texto BRUTO que chegou pelo iPhone,
+        antes de saber se ele bateu com algum gatilho — mesmo motivo de
+        _set_heard() pro mic, e o mesmo "Heard:" não serve aqui: ele é
+        sobre o QUE O MIC OUVIU agora, não sobre o iPhone.
+
+        Sem isto havia um buraco real: se a wake word do Mac mudar
+        (menu "Wake word…") sem atualizar o link salvo no iPhone,
+        RelayListener._handle_message() -> handle_complete() não bate
+        com nada e devolve None — main._on_result() nunca é chamado
+        (`if not resultado: return`), então NADA entrava em "Recent
+        activity". Justo a ferramenta feita pra responder "por que não
+        funcionou" ficava cega pra essa falha específica, porque só o
+        mic tinha esse log incondicional (_listen_loop_whisper chama
+        _set_heard() ANTES de saber se casou)."""
+        self._log_activity("phone", texto)
 
     def _on_dictation_open(self):
         self._set_state("dictating")
@@ -909,8 +930,18 @@ class VisperApp(rumps.App):
         # ANTIGO e reabrir a corrida que esse guard existe pra evitar.
         if self.session.dictating:
             self._set_state("dictating")
-        elif self.listening and self._current_state != "sent":
-            self._set_state("listening")
+        elif self._current_state != "sent":
+            # ANTES faltava este `else`: só revertia quando
+            # self.listening era True. Uso só-pelo-iPhone (self.listening
+            # False o tempo todo, cenário principal do relay — longe de
+            # casa, no treino) tem um caminho real onde dictating vira
+            # False sem nunca passar por on_send() (fechar um ditado
+            # SEM conteúdo pra mandar — dictation.py's _finalize()
+            # pula on_send nesse caso de propósito): sem este ramo, o
+            # ícone ficava preso em "dictating" pra sempre, mesmo com o
+            # app inteiramente ocioso — contradizendo a própria razão
+            # do ícone existir ("ele está me ouvindo agora?").
+            self._set_state("listening" if self.listening else "stopped")
 
     def _listen_loop_safe(self):
         """

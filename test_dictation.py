@@ -416,3 +416,160 @@ class AberturaToleranteTest(unittest.TestCase):
 
         session.handle("over")
         self.assertIn(("colou", "o modelo whisper é o que transcreve"), calls)
+
+
+class HandleCompleteTest(unittest.TestCase):
+    """
+    handle_complete() é o caminho do relay do iPhone (ver
+    relay_listener.py) — cada chamada já é a mensagem INTEIRA, então,
+    ao contrário de handle(), o conteúdo não é vasculhado atrás de
+    CLOSE_TRIGGERS no meio do texto; só um marcador GRUDADO NO FIM é
+    removido. Regressão real que motivou isto: o app de iPhone
+    (docs/index.html, buildMessage()) gruda " over" no fim de TODA
+    mensagem só pra sinalizar "isto é tudo" — com handle() comum,
+    conteúdo real contendo "over"/"câmbio" (ex.: "let's talk this
+    over", "qual é o câmbio do dólar hoje") era cortado ali no meio, e
+    o texto TRUNCADO já tinha sido colado e o Enter já apertado antes
+    de qualquer um perceber.
+    """
+
+    def _build_session(self, calls, with_sounds=False):
+        ai_actions = {"claude": lambda: calls.append("abriu_claude")}
+        router = CommandRouter(ai_actions)
+        kwargs = {}
+        if with_sounds:
+            kwargs["on_open"] = lambda: calls.append("som_abriu")
+            kwargs["on_send"] = lambda: calls.append("som_mandou")
+        return DictationSession(
+            router=router,
+            paste_action=lambda t: calls.append(("colou", t)),
+            send_action=lambda: calls.append("mandou_enter"),
+            **kwargs,
+        )
+
+    def test_abre_e_manda_de_uma_vez(self):
+        calls = []
+        session = self._build_session(calls)
+        resultado = session.handle_complete("vIsper claude confirma a reuniao over")
+        self.assertIn("abriu_claude", calls)
+        self.assertIn(("colou", "confirma a reuniao"), calls)
+        self.assertIn("mandou_enter", calls)
+        self.assertFalse(session.dictating)
+        self.assertTrue(resultado.startswith("opened claude"))
+        self.assertIn("sent:", resultado)
+
+    def test_conteudo_contendo_over_no_meio_nao_e_truncado(self):
+        # A regressão exata: "over" faz parte do que a pessoa quis
+        # dizer, não é o marcador (que é o SEGUNDO "over", grudado
+        # pelo app). O texto inteiro tem que ser colado.
+        calls = []
+        session = self._build_session(calls)
+        session.handle_complete("vIsper claude let's talk this over quickly over")
+        self.assertIn(("colou", "let's talk this over quickly"), calls)
+        self.assertIn("mandou_enter", calls)
+
+    def test_conteudo_contendo_cambio_no_meio_nao_e_truncado(self):
+        calls = []
+        session = self._build_session(calls)
+        session.handle_complete("vIsper claude qual e o cambio do dolar hoje over")
+        self.assertIn(("colou", "qual e o cambio do dolar hoje"), calls)
+        self.assertIn("mandou_enter", calls)
+
+    def test_so_wake_e_ia_sem_conteudo_nao_manda_vazio(self):
+        # "vIsper claude over" — só testando a conexão (ver README),
+        # sem conteúdo de verdade. O único "over" é o marcador.
+        calls = []
+        session = self._build_session(calls)
+        resultado = session.handle_complete("vIsper claude over")
+        self.assertIn("abriu_claude", calls)
+        self.assertNotIn("mandou_enter", calls)
+        self.assertFalse(any(c[0] == "colou" for c in calls if isinstance(c, tuple)))
+        self.assertIn("nothing to send", resultado)
+
+    def test_sem_wake_word_nao_faz_nada(self):
+        calls = []
+        session = self._build_session(calls)
+        self.assertIsNone(session.handle_complete("qualquer coisa aleatoria over"))
+        self.assertEqual(calls, [])
+
+    def test_mensagem_chegando_com_ditado_de_mic_ja_aberto_fecha_na_hora(self):
+        # Uma mensagem do iPhone não pode ficar pendurada esperando um
+        # fechamento que ela nunca vai mandar de novo.
+        calls = []
+        session = self._build_session(calls)
+        session.handle("vIsper claude")  # abre pelo mic
+        session.handle("primeira parte ditada pelo mic")
+        self.assertTrue(session.dictating)
+
+        resultado = session.handle_complete("resto mandado pelo iphone over")
+
+        self.assertFalse(session.dictating)
+        self.assertIn(
+            ("colou", "primeira parte ditada pelo mic resto mandado pelo iphone"),
+            calls,
+        )
+        self.assertIn("sent:", resultado)
+
+    def test_texto_vazio_nao_faz_nada(self):
+        calls = []
+        session = self._build_session(calls)
+        self.assertIsNone(session.handle_complete("   "))
+        self.assertEqual(calls, [])
+
+    def test_on_open_e_on_send_disparam_normalmente(self):
+        calls = []
+        session = self._build_session(calls, with_sounds=True)
+        session.handle_complete("vIsper claude oi over")
+        self.assertIn("som_abriu", calls)
+        self.assertIn("som_mandou", calls)
+
+    def test_lock_permite_chamadas_concorrentes_sem_perder_conteudo(self):
+        # Regressão: mic e iPhone rodam em THREADS diferentes sobre a
+        # MESMA sessão (main.py). Sem lock, duas chamadas quase
+        # simultâneas podiam ler self.dictating==False antes de
+        # qualquer uma escrever True, abrindo duas IAs e perdendo o
+        # conteúdo de uma delas. Não reproduz o timing exato da corrida
+        # (isso exigiria hardware real), mas prova que o lock existe e
+        # serializa: nenhuma chamada concorrente é perdida ou
+        # corrompida — todo conteúdo mandado aparece colado em algum
+        # dos resultados.
+        import threading
+
+        calls = []
+        lock = threading.Lock()
+
+        def calls_append(item):
+            with lock:
+                calls.append(item)
+
+        ai_actions = {"claude": lambda: calls_append("abriu_claude")}
+        router = CommandRouter(ai_actions)
+        session = DictationSession(
+            router=router,
+            paste_action=lambda t: calls_append(("colou", t)),
+            send_action=lambda: calls_append("mandou_enter"),
+        )
+        self.assertTrue(hasattr(session, "_lock"))
+
+        resultados = [None] * 20
+
+        def worker(i):
+            resultados[i] = session.handle_complete(f"vIsper claude mensagem {i} over")
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Cada uma das 20 mensagens tem que ter sido colada exatamente
+        # uma vez — nenhuma perdida, nenhuma duplicada, nenhuma
+        # corrompida por interferência de outra thread.
+        coladas = [c[1] for c in calls if isinstance(c, tuple) and c[0] == "colou"]
+        esperado = [f"mensagem {i}" for i in range(20)]
+        self.assertCountEqual(coladas, esperado)
+        self.assertFalse(session.dictating)
+
+
+if __name__ == "__main__":
+    unittest.main()

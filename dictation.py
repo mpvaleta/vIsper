@@ -38,12 +38,15 @@ novos (cada palavra que ele reconhece precisa do próprio treino em
 console.picovoice.ai — ver nota em wake_word_porcupine.py).
 """
 
+import threading
+
 from config import WAKE_WORD, CLOSE_TRIGGERS, CANCEL_TRIGGERS
 from text_utils import (
     contains_word,
     split_after_word,
     split_before_any,
     starts_with_word,
+    strip_trailing_word,
 )
 
 # Tudo que fecha um ditado: a própria wake word de novo, mais os
@@ -115,71 +118,155 @@ class DictationSession:
         self.on_cancel = on_cancel
         self.dictating = False
         self.buffer = []
+        # Guarda dictating/buffer contra o mic e o relay do iPhone
+        # rodando em THREADS diferentes sobre a MESMA sessão de
+        # propósito (main.py inicia as duas como threads daemon
+        # separadas — ver CLAUDE.md, "compartilhar a instância evita
+        # dois estados desencontrados"). Sem isto havia uma corrida de
+        # verdade: "if not self.dictating" podia ser lida por AMBAS as
+        # threads antes de qualquer uma escrever True, porque no meio
+        # tem uma chamada BLOQUEANTE de verdade (router.route() ->
+        # subprocess.run() abrindo o app) entre a leitura e a escrita —
+        # janela larga o bastante pra um comando quase simultâneo pelo
+        # mic e pelo iPhone abrir DUAS IAs e perder o conteúdo de uma
+        # das duas. RLock (não Lock): os métodos privados de fechamento
+        # são chamados de DENTRO de handle()/handle_complete(), que já
+        # seguram o lock.
+        self._lock = threading.RLock()
 
     def handle(self, transcript: str):
         """
-        Processa um pedaço de texto transcrito. Retorna uma string
-        curta descrevendo o que aconteceu (pra notificação/log), ou
-        None se não houve nenhuma ação.
-        """
-        text = transcript.strip()
-        if not text:
-            return None
+        Processa um pedaço de texto transcrito AO VIVO (mic local, um
+        chunk por vez — pode ser só parte de uma frase). Retorna uma
+        string curta descrevendo o que aconteceu (pra notificação/log),
+        ou None se não houve nenhuma ação.
 
-        if not self.dictating:
-            matched = self.router.route(text)
-            if not matched:
+        Fecha ao ouvir a wake word de novo ou qualquer CLOSE_TRIGGERS
+        dentro do texto — necessário aqui porque um chunk de mic nunca
+        vem com um sinal explícito de "isto é tudo". Canais que já
+        entregam a mensagem INTEIRA de uma vez (o relay do iPhone) usam
+        handle_complete() em vez desta, que não tem esse risco — ver lá
+        o porquê.
+        """
+        with self._lock:
+            text = transcript.strip()
+            if not text:
                 return None
 
-            ai_name, leftover = matched
-            self.dictating = True
-            self.buffer = []
-            if self.on_open:
-                self.on_open()
-            opened = f"opened {ai_name} — listening for dictation"
-            if not leftover:
+            if not self.dictating:
+                matched = self.router.route(text)
+                if not matched:
+                    return None
+
+                ai_name, leftover = matched
+                self.dictating = True
+                self.buffer = []
+                if self.on_open:
+                    self.on_open()
+                opened = f"opened {ai_name} — listening for dictation"
+                if not leftover:
+                    return opened
+
+                # `leftover` é o conteúdo real que veio no MESMO trecho
+                # que o comando de abrir — ex.: "vIsper claude qual é a
+                # previsão do tempo" tudo numa respiração só. Sem isso,
+                # só o nome da IA seria usado e o resto descartado.
+                #
+                # E esse mesmo trecho pode trazer o gatilho de
+                # FECHAMENTO junto ("vIsper claude qual é a previsão do
+                # tempo over" — pedido inteiro numa respiração só, que é
+                # justamente o jeito mais natural de usar isso). Antes,
+                # o "over" ia pro buffer como se fosse conteúdo: o
+                # ditado ficava aberto pra sempre esperando um
+                # fechamento que já tinha sido dito, e quando enfim
+                # fechasse a palavra "over" ia colada no texto mandado
+                # pra IA. As duas pontas (abertura e fechamento) já
+                # tinham sido corrigidas separadamente; faltava o caso
+                # em que as duas caem no MESMO trecho.
+                # Cancelar vem ANTES de fechar aqui pelo mesmo motivo de
+                # baixo: "vIsper cancela" contém a wake word, que também
+                # é gatilho de fechamento — sem esta ordem, o
+                # fechamento ganharia e mandaria justamente o que você
+                # pediu pra jogar fora.
+                if _is_cancel(leftover):
+                    return f"{opened}; {self._cancel()}"
+                if _has_close_trigger(leftover):
+                    return f"{opened}; {self._close(leftover)}"
+
+                self.buffer = [leftover]
                 return opened
 
-            # `leftover` é o conteúdo real que veio no MESMO trecho que
-            # o comando de abrir — ex.: "vIsper claude qual é a
-            # previsão do tempo" tudo numa respiração só. Sem isso, só
-            # o nome da IA seria usado e o resto descartado.
-            #
-            # E esse mesmo trecho pode trazer o gatilho de FECHAMENTO
-            # junto ("vIsper claude qual é a previsão do tempo over" —
-            # pedido inteiro numa respiração só, que é justamente o
-            # jeito mais natural de usar isso). Antes, o "over" ia pro
-            # buffer como se fosse conteúdo: o ditado ficava aberto pra
-            # sempre esperando um fechamento que já tinha sido dito, e
-            # quando enfim fechasse a palavra "over" ia colada no texto
-            # mandado pra IA. As duas pontas (abertura e fechamento) já
-            # tinham sido corrigidas separadamente; faltava o caso em
-            # que as duas caem no MESMO trecho.
-            # Cancelar vem ANTES de fechar aqui pelo mesmo motivo de
-            # baixo: "vIsper cancela" contém a wake word, que também é
-            # gatilho de fechamento — sem esta ordem, o fechamento
-            # ganharia e mandaria justamente o que você pediu pra
-            # jogar fora.
-            if _is_cancel(leftover):
-                return f"{opened}; {self._cancel()}"
-            if _has_close_trigger(leftover):
-                return f"{opened}; {self._close(leftover)}"
+            # ORDEM IMPORTA: a wake word é gatilho de fechamento, e
+            # "vIsper cancela" contém a wake word. Se o fechamento fosse
+            # checado primeiro, pedir pra cancelar MANDARIA o ditado —
+            # o oposto exato do que foi pedido, e irreversível.
+            if _is_cancel(text):
+                return self._cancel()
 
-            self.buffer = [leftover]
-            return opened
+            if _has_close_trigger(text):
+                return self._close(text)
 
-        # ORDEM IMPORTA: a wake word é gatilho de fechamento, e
-        # "vIsper cancela" contém a wake word. Se o fechamento fosse
-        # checado primeiro, pedir pra cancelar MANDARIA o ditado — o
-        # oposto exato do que foi pedido, e irreversível.
-        if _is_cancel(text):
-            return self._cancel()
+            self.buffer.append(text)
+            return "dictating…"
 
-        if _has_close_trigger(text):
-            return self._close(text)
+    def handle_complete(self, transcript: str):
+        """
+        Processa um comando que já chega INTEIRO e pronto (hoje: o
+        relay do iPhone — ver relay_listener.py). Abre a IA do mesmo
+        jeito que handle() (mesmo router, mesma tolerância a erro de
+        transcrição/digitação), mas o conteúdo depois do nome da IA só
+        tem o marcador de fechamento removido se ele estiver GRUDADO NO
+        FIM (strip_trailing_word) — nunca procurado no meio do texto.
 
-        self.buffer.append(text)
-        return "dictating…"
+        Por quê: handle() precisa procurar um gatilho de fechamento EM
+        QUALQUER LUGAR do texto porque um chunk de mic pode conter
+        abertura e fechamento juntos, sem pausa, e o gatilho marca
+        "parei de falar AQUI". O iPhone não tem esse problema — cada
+        mensagem que ele manda (docs/index.html, buildMessage()) já É
+        a mensagem completa, com um "over" GRUDADO NO FIM por
+        construção, sempre, em TODA mensagem, só pra sinalizar "isto é
+        tudo" pro parser, não como algo que a pessoa quis dizer. Bug
+        real que isso corrigiu: usando o mesmo "procura em qualquer
+        lugar" do mic, qualquer conteúdo dita/digitada que já
+        contivesse a palavra "over" (ex.: "let's talk this over") ou
+        "câmbio" (ex.: "qual é o câmbio do dólar hoje") batia como
+        fechamento ANTES do fim — split_before_any() cortava ali, e o
+        texto TRUNCADO já tinha sido colado E o Enter já tinha sido
+        apertado antes de qualquer um perceber. Se o próprio conteúdo
+        começasse com "over"/"câmbio", a mensagem inteira era
+        descartada e nada era mandado — os dois casos com o telefone
+        mostrando "Sent to your Mac" de qualquer forma, porque o POST
+        pro ntfy tinha sucesso mesmo quando o Mac não mandou nada ou
+        mandou pela metade. strip_trailing_word() olha só o FIM, então
+        um "over"/"câmbio" de verdade no meio da frase sobrevive, e só
+        o marcador que o app grudou é removido.
+
+        Se uma sessão de mic já estiver aberta (self.dictating), o
+        texto entra no buffer e fecha na hora — sem isso, uma mensagem
+        do iPhone chegando no meio de um ditado por voz ficaria
+        pendurada esperando um fechamento que essa mensagem nunca vai
+        mandar (o iPhone não repete a chamada).
+        """
+        with self._lock:
+            text = transcript.strip()
+            if not text:
+                return None
+
+            if not self.dictating:
+                matched = self.router.route(text)
+                if not matched:
+                    return None
+                ai_name, leftover = matched
+                self.dictating = True
+                self.buffer = []
+                if self.on_open:
+                    self.on_open()
+                opened = f"opened {ai_name} — listening for dictation"
+                if not leftover:
+                    return opened
+                return f"{opened}; {self._close_verbatim(leftover)}"
+
+            return self._close_verbatim(text)
 
     def _cancel(self):
         """Joga o ditado fora sem colar nada. Nenhuma ação de verdade
@@ -209,7 +296,20 @@ class DictationSession:
         prefix = split_before_any(text, CLOSE_WORDS)
         if prefix:
             self.buffer.append(prefix)
+        return self._finalize()
 
+    def _close_verbatim(self, text: str):
+        """Como _close(), mas só remove um marcador de fechamento se
+        ele estiver GRUDADO NO FIM de `text` (strip_trailing_word) —
+        nunca procurado no meio (ver handle_complete() pro porquê)."""
+        self.buffer.append(strip_trailing_word(text, CLOSE_WORDS))
+        return self._finalize()
+
+    def _finalize(self):
+        """Junta o buffer, cola, manda Enter, e volta pro estado
+        ocioso. Compartilhado por _close() e _close_verbatim() — as
+        duas só diferem em COMO preparam o buffer antes de chamar
+        isto."""
         full_text = " ".join(self.buffer).strip()
         self.dictating = False
         self.buffer = []

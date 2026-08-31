@@ -205,7 +205,7 @@ class TravasDoRelayTest(unittest.TestCase):
         session = MagicMock()
         session.dictating = dictating
         session.router.preview.return_value = preview_ai
-        session.handle.return_value = "ok"
+        session.handle_complete.return_value = "ok"
         return session
 
     def test_claude_code_pelo_iphone_e_recusado(self):
@@ -217,7 +217,7 @@ class TravasDoRelayTest(unittest.TestCase):
 
         resultado = listener._handle_message("vIsper claude code rm -rf algo over")
 
-        session.handle.assert_not_called()
+        session.handle_complete.assert_not_called()
         self.assertIn("claude_code", resultado)
 
     def test_recusa_explica_em_vez_de_sumir_calada(self):
@@ -233,7 +233,9 @@ class TravasDoRelayTest(unittest.TestCase):
 
         resultado = listener._handle_message("vIsper claude qual é a previsão over")
 
-        session.handle.assert_called_once_with("vIsper claude qual é a previsão over")
+        session.handle_complete.assert_called_once_with(
+            "vIsper claude qual é a previsão over"
+        )
         self.assertEqual(resultado, "ok")
 
     def test_com_ditado_ja_aberto_nao_consulta_o_roteador(self):
@@ -246,13 +248,13 @@ class TravasDoRelayTest(unittest.TestCase):
         listener._handle_message("preciso revisar o claude code amanhã")
 
         session.router.preview.assert_not_called()
-        session.handle.assert_called_once()
+        session.handle_complete.assert_called_once()
 
     def test_lista_de_bloqueio_vazia_libera_tudo(self):
         session = self._session(preview_ai="claude_code")
         listener = RelayListener(session, topic="t", blocked_ais=[])
         listener._handle_message("vIsper claude code oi")
-        session.handle.assert_called_once()
+        session.handle_complete.assert_called_once()
 
     def test_mensagem_gigante_e_cortada_antes_de_ser_colada(self):
         session = self._session(preview_ai="claude")
@@ -260,11 +262,69 @@ class TravasDoRelayTest(unittest.TestCase):
 
         resultado = listener._handle_message("x" * 51)
 
-        session.handle.assert_not_called()
+        session.handle_complete.assert_not_called()
         self.assertIn("grande demais", resultado)
 
     def test_mensagem_no_limite_exato_passa(self):
         session = self._session(preview_ai="claude")
         listener = RelayListener(session, topic="t", max_chars=50)
         listener._handle_message("x" * 50)
-        session.handle.assert_called_once()
+        session.handle_complete.assert_called_once()
+
+
+class OnMessageHookTest(unittest.TestCase):
+    """
+    on_message existe pro "Recent activity" do main.py conseguir
+    mostrar o que o iPhone mandou mesmo quando NADA bateu com nada
+    (ex.: wake word desatualizada no telefone) — sem isto, esse caso
+    não deixava rastro nenhum, justo a ferramenta feita pra
+    diagnosticar por que "não funcionou".
+    """
+
+    def _session(self, dictating=False, preview_ai=None, handle_result="ok"):
+        session = MagicMock()
+        session.dictating = dictating
+        session.router.preview.return_value = preview_ai
+        session.handle_complete.return_value = handle_result
+        return session
+
+    def test_dispara_com_o_texto_bruto_quando_bate(self):
+        session = self._session(preview_ai="claude")
+        recebidos = []
+        listener = RelayListener(session, topic="t", on_message=recebidos.append)
+        listener._handle_message("vIsper claude qual é a previsão over")
+        self.assertEqual(recebidos, ["vIsper claude qual é a previsão over"])
+
+    def test_dispara_mesmo_quando_nada_bate(self):
+        # O caso real que motivou isto: wake word errada/desatualizada
+        # -> handle_complete() devolve None -> sem este hook, nada
+        # registraria que a mensagem sequer chegou.
+        session = self._session(preview_ai=None, handle_result=None)
+        recebidos = []
+        listener = RelayListener(session, topic="t", on_message=recebidos.append)
+        listener._handle_message("iris claude oi over")
+        self.assertEqual(recebidos, ["iris claude oi over"])
+
+    def test_dispara_mesmo_quando_bloqueado_pelo_relay(self):
+        session = self._session(preview_ai="claude_code")
+        recebidos = []
+        listener = RelayListener(
+            session, topic="t", blocked_ais=["claude_code"], on_message=recebidos.append
+        )
+        listener._handle_message("vIsper claude code rm -rf algo over")
+        self.assertEqual(recebidos, ["vIsper claude code rm -rf algo over"])
+
+    def test_dispara_mesmo_quando_grande_demais(self):
+        session = self._session(preview_ai="claude")
+        recebidos = []
+        listener = RelayListener(
+            session, topic="t", max_chars=10, on_message=recebidos.append
+        )
+        listener._handle_message("x" * 20)
+        self.assertEqual(recebidos, ["x" * 20])
+
+    def test_sem_callback_nao_quebra_nada(self):
+        session = self._session(preview_ai="claude")
+        listener = RelayListener(session, topic="t")
+        listener._handle_message("vIsper claude oi over")
+        session.handle_complete.assert_called_once()

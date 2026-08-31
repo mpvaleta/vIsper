@@ -367,6 +367,42 @@ def trim_for_content(text: str) -> str:
     return _strip_edges(text, right=False).rstrip()
 
 
+def strip_trailing_word(haystack: str, words) -> str:
+    """
+    Se `haystack` TERMINA com uma das `words` (casada como palavra ou
+    frase inteira, sem acento, sem diferenciar maiúscula/minúscula),
+    devolve tudo ANTES dessa ocorrência final. Senão devolve
+    `haystack` só com espaço aparado nas bordas.
+
+    Existe pra dictation.DictationSession.handle_complete(): canais
+    que entregam a mensagem já COMPLETA (o relay do iPhone) grudam um
+    marcador fixo tipo "over" no FIM de toda mensagem, sempre, só pra
+    sinalizar "isto é tudo" — não é o mesmo caso de split_before_any(),
+    que acha a PRIMEIRA ocorrência em qualquer lugar do texto (certo
+    pra um transcript de mic ainda podendo trazer o gatilho colado no
+    meio). Se essa função usasse a mesma busca "em qualquer lugar", um
+    conteúdo que legitimamente contivesse "over"/"câmbio" ANTES do
+    marcador final seria cortado ali no meio — exatamente o bug que
+    handle_complete() existe pra evitar. Casando só a partir do FIM,
+    uma frase como "vamos discutir isso, over e out" (conteúdo real
+    termina com "over" seguido de mais palavras, aí vem o marcador de
+    verdade) preserva o "over" do meio e remove só o marcador colado no
+    fim; e "let's talk this over" + marcador vira "let's talk this
+    over over" -> remove só o ÚLTIMO, devolvendo "let's talk this
+    over" — o "over" de verdade da frase sobrevive.
+    """
+    trimmed = haystack.rstrip()
+    words = [w for w in words if w]
+    if not words or not trimmed:
+        return trimmed
+    folded, index_map = _fold_with_index_map(trimmed)
+    pattern = _word_pattern(*(_fold_for_match(w) for w in words)) + r"$"
+    match = re.search(pattern, folded)
+    if not match:
+        return trimmed
+    return trimmed[: index_map[match.start()]].rstrip()
+
+
 def split_before_any(haystack: str, words) -> str:
     """
     Retorna o que vem ANTES da PRIMEIRA ocorrência de QUALQUER uma das

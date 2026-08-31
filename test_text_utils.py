@@ -7,6 +7,7 @@ from text_utils import (
     fold_accents,
     split_after_word,
     split_before_any,
+    strip_trailing_word,
     text_after_word,
 )
 
@@ -169,6 +170,82 @@ class SplitBeforeAnyTest(unittest.TestCase):
         # ½ e ﬁ também decompõem em mais de um caractere no NFKD
         self.assertEqual(
             split_before_any("são ½ litros over", ["over"]), "são ½ litros"
+        )
+
+
+class StripTrailingWordTest(unittest.TestCase):
+    """
+    Ver a docstring de strip_trailing_word() em text_utils.py: existe
+    pra dictation.DictationSession.handle_complete() poder remover só
+    o marcador de fechamento que o app de iPhone GRUDA NO FIM de toda
+    mensagem (buildMessage(), docs/index.html), sem tratar uma
+    ocorrência de verdade da mesma palavra NO MEIO do conteúdo como se
+    fosse o marcador — regressão real: "let's talk this over" (a
+    palavra "over" é parte do que a pessoa quis dizer) virava "over"
+    sendo cortado ali achando que era o fim, com o "quickly" ou
+    qualquer coisa depois PERDIDO e o Enter já apertado.
+    """
+
+    def test_remove_so_a_ocorrencia_final(self):
+        self.assertEqual(
+            strip_trailing_word("confirma a reuniao de amanha over", ["over"]),
+            "confirma a reuniao de amanha",
+        )
+
+    def test_ocorrencia_real_no_meio_sobrevive(self):
+        # A palavra "over" faz parte do que a pessoa quis dizer — só o
+        # marcador colado no FIM (o segundo "over") pode sumir.
+        self.assertEqual(
+            strip_trailing_word("let's talk this over over", ["over"]),
+            "let's talk this over",
+        )
+
+    def test_cambio_no_meio_da_frase_em_portugues_sobrevive(self):
+        self.assertEqual(
+            strip_trailing_word("qual e o cambio do dolar hoje over", ["over", "câmbio"]),
+            "qual e o cambio do dolar hoje",
+        )
+
+    def test_conteudo_e_so_o_marcador_fica_vazio(self):
+        # "vIsper claude over" (só testando a conexão, sem conteúdo de
+        # verdade) — o único "over" presente É o marcador.
+        self.assertEqual(strip_trailing_word("over", ["over"]), "")
+
+    def test_sem_marcador_no_fim_devolve_tudo(self):
+        self.assertEqual(
+            strip_trailing_word("however this still works", ["over"]),
+            "however this still works",
+        )
+
+    def test_marcador_nao_e_o_ultimo_token_nao_conta(self):
+        # "over" aparece, mas não é a ÚLTIMA palavra — não é o
+        # marcador, então nada é removido.
+        self.assertEqual(
+            strip_trailing_word("over and out, team", ["over"]),
+            "over and out, team",
+        )
+
+    def test_preserva_maiuscula_acento_e_pontuacao_do_que_sobra(self):
+        self.assertEqual(
+            strip_trailing_word("Não esqueça da reunião de amanhã! over", ["over"]),
+            "Não esqueça da reunião de amanhã!",
+        )
+
+    def test_ignora_acento_e_caixa_do_marcador(self):
+        self.assertEqual(
+            strip_trailing_word("preciso trocar dinheiro CÂMBIO", ["câmbio"]),
+            "preciso trocar dinheiro",
+        )
+
+    def test_lista_de_palavras_vazia_devolve_tudo(self):
+        self.assertEqual(strip_trailing_word("qualquer coisa over", []), "qualquer coisa over")
+
+    def test_string_vazia_devolve_vazia(self):
+        self.assertEqual(strip_trailing_word("", ["over"]), "")
+
+    def test_caractere_que_muda_de_tamanho_ao_dobrar_nao_desloca_o_corte(self):
+        self.assertEqual(
+            strip_trailing_word("Bom dia… tudo bem over", ["over"]), "Bom dia… tudo bem"
         )
 
 
