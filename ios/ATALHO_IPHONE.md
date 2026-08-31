@@ -43,10 +43,24 @@ e o vIsper rodando lá. Sem isso não há quem escute.
    — abre o Claude, cola a pergunta e aperta Enter, tudo num disparo
    só.
 
+   **Importante — sempre comece ditando o nome de uma IA**
+   ("claude", "chatgpt", "perplexity" ou "gemini"), igual ao exemplo
+   acima. O Mac só abre alguma coisa se um desses nomes vier logo
+   depois de "vIsper" — sem um deles, a mensagem chega e não abre
+   NADA, sem erro nenhum dos dois lados (o "over" que este Atalho
+   sempre gruda no fim impede o comportamento padrão de "só a wake
+   word abre a IA de sempre" de valer aqui). Ex.: dite "claude qual é
+   a previsão do tempo", nunca só "qual é a previsão do tempo".
+
 4. **Adicionar ação** → busque **"Obter conteúdo do URL"**.
    - No campo URL: `https://ntfy.sh/SEU_TOPICO`
-     (troque `SEU_TOPICO` pelo valor exato do `NTFY_TOPIC` do
-     `config.py` — tem que ser idêntico, sem `https://` duplicado)
+     (troque `SEU_TOPICO` pelo tópico de verdade — **não** o
+     `NTFY_TOPIC` que aparece em `config.py`: esse arquivo é
+     versionado e público, então `NTFY_TOPIC` nele é sempre `""`. O
+     valor de verdade está no link que `python3 setup_visper.py`
+     imprimiu/copiou, ou em
+     `~/Library/Application Support/vIsper/settings.json` no Mac —
+     tem que ser idêntico, sem `https://` duplicado)
    - Toque em **Mostrar mais**
    - **Método**: mude de GET pra **POST**
    - **Corpo da solicitação**: mude pra **Arquivo**
@@ -81,10 +95,11 @@ Com o atalho salvo, todos estes caminhos já funcionam de graça:
 
 | Sintoma | Provável causa |
 |---|---|
-| Atalho roda, Mac não reage | Tópico diferente entre iPhone e `config.py`, ou o vIsper não está rodando no Mac |
+| Atalho roda, Mac não reage | Tópico diferente entre iPhone e o vIsper (ver passo 4 — não é o `NTFY_TOPIC` de `config.py`), ou o vIsper não está rodando no Mac |
 | Erro de rede no atalho | URL malformada — confira se é `https://ntfy.sh/topico`, sem barra no fim |
 | Mac reage mas não cola nada | Permissão de Acessibilidade faltando no Mac (ver README) |
 | Abre a IA mas fica esperando | O `over` do passo 3 não entrou na frase — confira que ele está DEPOIS da variável |
+| Nada acontece, nenhum erro em lugar nenhum | Você não começou ditando o nome de uma IA (ver aviso no passo 3) — "qual é a previsão" sozinho não abre nada; tem que ser "claude qual é a previsão" |
 
 Teste o lado do Mac isolado antes de culpar o iPhone — pelo Terminal
 do próprio Mac:

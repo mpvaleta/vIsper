@@ -495,9 +495,21 @@ Módulos principais (mic local, sempre ativos):
     `_fold_with_index_map()` guarda, pra cada caractere do texto
     dobrado, de qual posição do original ele veio — **qualquer função
     nova que ache posição no dobrado e fatie o original TEM que usar
-    esse mapa**. `starts_with_word()` é a mais nova, e existe só pra
-    o cancelamento poder exigir ADJACÊNCIA à wake word — ver a
-    decisão sobre cancelar acima. 55 testes.
+    esse mapa**. `starts_with_word()` é a mais nova antes desta leva, e
+    existe só pra o cancelamento poder exigir ADJACÊNCIA à wake word —
+    ver a decisão sobre cancelar acima.
+  - `strip_trailing_word()` — a mais nova. Diferente das duas famílias
+    acima: procura o gatilho SÓ NO FIM do texto (não em qualquer
+    lugar), e existe especificamente pro relay do iPhone (ver
+    `dictation.handle_complete()` e a decisão de arquitetura
+    correspondente) — o app de iPhone gruda um "over" fixo no FIM de
+    TODA mensagem só pra sinalizar "isto é tudo", não como parte do
+    que a pessoa quis dizer, então achar a PRIMEIRA ocorrência
+    (`split_before_any`, certo pra mic) cortaria cedo demais qualquer
+    conteúdo que legitimamente contivesse "over"/"câmbio" antes do
+    marcador. Casando só a partir do fim, "let's talk this over" +
+    marcador vira "let's talk this over over" → remove só o ÚLTIMO,
+    preservando o "over" de verdade da frase. 66 testes.
 - `audio_input.py` — lista/detecta microfones (`guess_preferred_device()`,
   `classify_device()`, orientados por `config.PREFERRED_INPUT_DEVICES` —
   casamento por SUBSTRING simples, não palavra inteira, porque nome de
@@ -563,7 +575,32 @@ Módulos principais (mic local, sempre ativos):
   opcionais (callbacks sem argumento, só feedback — não afetam a
   máquina de estados; `on_send` NÃO dispara quando o fechamento não
   tinha nada pra mandar), usados por `main.py` pra tocar o earcon.
-  33 testes dedicados.
+  **`handle_complete()`** é a segunda entrada pública, pro relay do
+  iPhone (ver `relay_listener.py` e a decisão de arquitetura
+  correspondente): ao contrário de `handle()`, o conteúdo só tem um
+  gatilho removido se ele estiver GRUDADO NO FIM
+  (`text_utils.strip_trailing_word()`), nunca procurado no meio —
+  corrige um bug real de dados: o app de iPhone gruda " over" no fim
+  de TODA mensagem por construção, então com `handle()` comum
+  qualquer conteúdo ditado/digitado que já contivesse "over" (ex.:
+  "let's talk this over") ou "câmbio" era TRUNCADO ali no meio, já
+  colado E já com Enter apertado antes de alguém perceber — e o
+  telefone mostrava "Sent to your Mac" de qualquer forma, porque o
+  POST pro ntfy tinha sucesso mesmo quando o Mac mandou a mensagem
+  pela metade. `self._lock` (`threading.RLock`) protege
+  `dictating`/`buffer` porque `handle()`/`handle_complete()` rodam em
+  THREADS diferentes sobre a MESMA sessão (mic e relay, ver
+  `main.py`) — sem isso havia uma corrida de verdade: a checagem
+  `not self.dictating` podia ser lida por AMBAS as threads antes de
+  qualquer uma escrever `True`, porque no meio tem uma chamada
+  BLOQUEANTE de verdade (`router.route()` → `subprocess.run()` abrindo
+  o app) entre ler e escrever — janela larga o bastante pra um comando
+  quase simultâneo pelo mic e pelo iPhone abrir DUAS IAs e perder o
+  conteúdo de uma das duas. 42 testes dedicados (inclui um teste de 20
+  threads concorrentes contra a mesma sessão, provando que o lock
+  serializa sem perder/corromper conteúdo — não reproduz o timing
+  exato da corrida original, isso exigiria hardware real, mas prova
+  que o lock existe e funciona).
 - `actions.py` — as ações de verdade (abrir app/URL, colar texto,
   apertar Enter) via `subprocess`/`osascript`. Todo `subprocess.run()`
   usa `check=True` — antes, uma falha (ex.: permissão de
@@ -617,7 +654,23 @@ Módulos principais (mic local, sempre ativos):
   `WAKE_WORD` uma vez na importação. **"Recent activity…"** mostra as
   últimas 25 linhas de "ouvi X / decidi Y" (`_log_activity()`,
   `_history`) — é a ferramenta de diagnóstico do teste manual, ver a
-  decisão sobre ela acima. O estado "mandou" é um
+  decisão sobre ela acima. `_log_relay_received()` alimenta esse
+  mesmo histórico com o marcador `"phone"` pra TODA mensagem que
+  chegar do iPhone, mesmo quando ela não bater com nada — plugado como
+  `on_message` na construção do `RelayListener`. Sem isso, uma wake
+  word desatualizada no telefone (trocada no Mac pelo menu "Wake
+  word…" sem atualizar o link salvo lá) fazia a mensagem chegar,
+  não bater com nada, e sumir sem deixar rastro NENHUM — nem no
+  "Heard:" (que é só do mic), nem em "Recent activity" — justo a
+  ferramenta feita pra responder "por que não funcionou" ficava cega
+  pra essa falha específica. `_on_result()` também ganhou um `else`
+  que faltava: fechar um ditado do iPhone SEM conteúdo pra mandar
+  (dictation.py's `_finalize()` pula `on_send()` nesse caso, de
+  propósito) nunca disparava o único outro código que reverte o ícone
+  — em uso só-pelo-iPhone (`self.listening == False` o tempo todo, o
+  cenário principal do relay, longe de casa) o ícone ficava PRESO em
+  "dictating" pra sempre depois disso, mesmo com o app inteiramente
+  ocioso. O estado "mandou" é um
   FLASH (`_flash_state`, ~2,5s) e não um estado fixo: mandar é um
   evento e a escuta continua, então o azul ficava respondendo ERRADO
   a única pergunta que o ícone existe pra responder ("ele está me
@@ -625,7 +678,7 @@ Módulos principais (mic local, sempre ativos):
   timer relê `_current_state` na hora de voltar em vez de capturar o
   estado de antes: entre o flash e o disparo dá tempo de parar a
   escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
-  desfeito por um timer velho. 80 testes
+  desfeito por um timer velho. 86 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -650,10 +703,19 @@ Módulos de entrada alternativa (compartilham o mesmo
   reabrindo na hora, sem pausa — um servidor que aceitasse e fechasse
   na sequência virava um laço de requisições HTTPS a toda velocidade
   contra o ntfy.sh. Linha de JSON malformada pula só aquela linha, em
-  vez de derrubar uma conexão que está funcionando. **Nunca testado
-  contra o ntfy.sh de verdade** — o parsing foi conferido contra a
-  documentação oficial do formato JSON deles, mas não contra uma
-  conexão real.
+  vez de derrubar uma conexão que está funcionando. Chama
+  `session.handle_complete()`, não `session.handle()` — ver a decisão
+  de arquitetura sobre isso (mensagens do relay já chegam INTEIRAS,
+  então não faz sentido vasculhar o meio do texto atrás de gatilho de
+  fechamento). `on_message` opcional dispara com o texto BRUTO de
+  TODA mensagem recebida, ANTES de qualquer trava ou tentativa de
+  casar gatilho — plugado em `main._log_relay_received()`, existe
+  porque sem isso uma mensagem que não bate com NADA (ex.: wake word
+  desatualizada no telefone) não deixava rastro nenhum em "Recent
+  activity", justo a ferramenta feita pra diagnosticar esse tipo de
+  falha silenciosa. **Nunca testado contra o ntfy.sh de verdade** — o
+  parsing foi conferido contra a documentação oficial do formato JSON
+  deles, mas não contra uma conexão real.
 - `wake_word_porcupine.py` — wrapper do motor Porcupine. Escrito
   contra a API real do pacote `pvporcupine` (conferida, não foi de
   memória). Não dá pra testar detecção de verdade sem AccessKey +
@@ -695,12 +757,27 @@ Configuração e distribuição (o que mudou o jeito de instalar):
 - `docs/` — o app de iPhone (PWA) publicado no GitHub Pages.
   `index.html` é autocontido; guarda tópico/wake word/IA escolhida em
   `localStorage`; monta `"<wake> <ia> <texto> over"` numa string só,
-  caindo no caminho abre-e-fecha-no-mesmo-trecho de `dictation.py`.
-  Envio automático com 3s de janela pra cancelar (transcrição erra;
-  mandar errado é pior que um toque a mais). **O automático NÃO
-  depende do Web Speech API** — ver a decisão de arquitetura sobre
-  isso logo abaixo. Corpo de texto puro no POST de propósito —
-  requisição simples, sem preflight CORS.
+  recebida pelo relay e entregue a `DictationSession.handle_complete()`
+  (não `handle()` — ver a decisão de arquitetura sobre isso: o " over"
+  aqui é só um marcador fixo de "isto é tudo", não um convite pra
+  vasculhar o meio do texto atrás dele). Envio automático com 3s de
+  janela pra cancelar (transcrição erra; mandar errado é pior que um
+  toque a mais). **O automático NÃO depende do Web Speech API** — ver
+  a decisão de arquitetura sobre isso logo abaixo. Corpo de texto puro
+  no POST de propósito — requisição simples, sem preflight CORS.
+  **Limitação conhecida, não corrigida**: o campo "AI" da tela
+  principal (`AIS`, ids `claude`/`chatgpt`/`perplexity`/`gemini`) é
+  colado como TEXTO na mesma string, então ainda passa pelo roteador
+  de texto livre do Mac — se o conteúdo ditado/digitado começar com a
+  palavra "code"/"código" logo depois de escolher o chip "Claude", o
+  roteador (ver `command_router.py` mais abaixo) enxerga "claude code"
+  como o gatilho de duas palavras de `claude_code`, que o relay
+  BLOQUEIA por segurança — a mensagem some sem chegar a nada, mesmo
+  a pessoa tendo escolhido "Claude" sem ambiguidade nenhuma pelo toque.
+  Corrigir direito exigiria o relay extrair o `ai_id` de um jeito que
+  não dependa de re-adivinhar por texto livre o que o botão já sabia
+  com certeza — mudança de contrato maior, não feita nesta leva
+  (ver "Limitações conhecidas").
 - `test_pwa.js` — 39 testes do PWA num Chromium DE VERDADE
   (Playwright), rodando no CI. **A peça mais validada do projeto** — a
   única testada em runtime real em vez de mocks. Achou dois defeitos
@@ -720,7 +797,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 319 testes no total. Rodar com:
+- `test_*.py` — 350 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -922,6 +999,50 @@ mudar bastante antes de virar assets de produção.
    não casar com nenhum gatilho. Conhecido, não corrigido — a correção
    (janela deslizante) muda o contrato de todo mundo que consome
    `chunks()`.
+13. **Escolher o chip "Claude" no app de iPhone e ditar/digitar
+   conteúdo que começa com "code"/"código" faz a mensagem ser
+   BLOQUEADA em vez de aberta.** Achado numa auditoria de bugs depois
+   que a Valeta relatou "quase nada funcionou" no telefone. Causa:
+   `config.AI_TRIGGERS` tem `"claude": ["claude"]` e
+   `"claude_code": ["claude code", "claude código"]` — quando o texto
+   que sobra depois da wake word é "claude code review needed...", o
+   roteador (`command_router._decide()`, ver a regra de desempate por
+   COMPRIMENTO em "Decisões de arquitetura") prefere corretamente o
+   gatilho de duas palavras "claude code" ao de uma palavra "claude",
+   porque é exatamente essa regra que resolve o caso de VOZ
+   equivalente ("vIsper claude code também abre um terminal" tem que
+   abrir o Claude Code, não o Claude). O problema é que o app de
+   iPhone já sabia com CERTEZA qual IA a pessoa queria (ela tocou no
+   chip "Claude"), mas codifica essa certeza como texto livre
+   ambíguo — jogando fora a própria vantagem de não depender de voz.
+   `claude_code` está em `RELAY_BLOCKED_AIS` (abrir o Terminal
+   remotamente é execução de comando — ver a decisão de segurança
+   sobre isso), então o resultado prático é a mensagem inteira
+   BLOQUEADA e descartada, com o telefone mostrando "Sent to your Mac"
+   mesmo assim (o POST pro ntfy teve sucesso). **Não corrigido nesta
+   leva**: a correção de verdade exige o relay extrair o `ai_id` de um
+   jeito que não dependa de re-adivinhar por texto livre o que o botão
+   já sabia com certeza (ex.: um contrato novo entre
+   `relay_listener.py` e `dictation.py` que aceite o nome da IA já
+   resolvido) — mudança de forma maior que as desta sessão, feitas com
+   cuidado pra não arriscar regredir a regra de desempate que existe
+   por um motivo real do lado da voz. Afeta só a combinação específica
+   "chip Claude" + conteúdo começando em "code"/"código"; as outras
+   três IAs não têm gatilho colidente nenhum.
+14. **O rascunho Swift (`ios/SendToVisperIntent.swift`) e a receita do
+   app Atalhos (`ios/ATALHO_IPHONE.md`) só abrem alguma coisa se o que
+   for falado/ditado COMEÇAR com o nome de uma IA configurada** —
+   documentado e corrigido nesta sessão (o Swift agora gruda a wake
+   word e "over" em `perform()`; o Atalho já grudava, mas faltava
+   avisar). Causa: os dois sempre grudam um "over" fixo no FIM da
+   mensagem, então o roteador nunca vê "só a wake word sozinha" (que é
+   o único caso que abre `DEFAULT_AI` sem precisar de nome de IA
+   nenhum — ver `command_router._decide()`) — sem um nome reconhecido
+   logo depois da wake word, a mensagem chega no Mac e não abre NADA,
+   sem erro visível em lugar nenhum. O Swift nunca foi compilado (sem
+   Xcode em nenhuma sessão até agora), então esse fix está só revisado
+   por leitura, não testado — ver o cabeçalho do arquivo pro checklist
+   completo antes de considerar pronto.
 
 ### O que JÁ foi validado em máquina real (não é mais suposição)
 

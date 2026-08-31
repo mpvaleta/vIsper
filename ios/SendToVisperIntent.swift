@@ -21,6 +21,14 @@
 //       em VisperShortcuts abaixo) — terceira frase adicionada como
 //       caminho alternativo mais garantido, mas nenhuma das três foi
 //       testada de verdade ainda.
+//    6. Dizer pra quem for usar: o `command` falado/ditado precisa
+//       COMEÇAR com o nome de uma IA configurada (ex.: "Mandar claude
+//       qual é a previsão do tempo pro vIsper") — perform() já gruda
+//       a wake word no início e "over" no fim (ver abaixo), mas o
+//       roteador do Mac (command_router.py) só abre uma IA se um nome
+//       reconhecido vier logo depois da wake word; sem isso a mensagem
+//       chega no Mac e não abre nada, sem erro nenhum (mesmo problema
+//       documentado em ATALHO_IPHONE.md pro caminho do app Atalhos).
 //
 //  Verificado de rede (deste ambiente, sem Mac): tentei bater no
 //  ntfy.sh de verdade pra validar as suposições de formato daqui
@@ -54,18 +62,39 @@ struct SendToVisperIntent: AppIntent {
 
     // TODO antes de usar de verdade: tirar esse hardcode daqui.
     // Ideias: tela simples de config dentro do app, ou Keychain.
-    // Tem que ser o MESMO valor de NTFY_TOPIC em config.py (Mac).
+    // Tem que ser o MESMO valor de NTFY_TOPIC em config.py (Mac) — ou,
+    // mais precisamente, o valor de VERDADE (settings.json ou o link
+    // impresso por setup_visper.py — config.py em si SEMPRE mostra ""
+    // no repositório, ver ATALHO_IPHONE.md pro mesmo erro já corrigido
+    // lá).
     private let ntfyServer = "https://ntfy.sh"
     private let ntfyTopic = "TROQUE_AQUI_PELO_MESMO_TOPICO_DO_MAC"
+
+    // Tem que bater com WAKE_WORD em config.py (Mac) — "vIsper" é o
+    // padrão de lá. Trocar aqui SE E SÓ SE tiver trocado por lá
+    // também (menu "Wake word…" do app do Mac).
+    private let wakeWord = "vIsper"
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         guard let url = URL(string: "\(ntfyServer)/\(ntfyTopic)") else {
             return .result(dialog: "Não consegui montar o endereço do vIsper.")
         }
 
+        // O pipeline do Mac (command_router.py + dictation.py) espera
+        // a wake word NO INÍCIO e um gatilho de fechamento NO FIM de
+        // toda mensagem completa — sem os dois, `command` sozinho
+        // nunca bate com nada: command_router._decide() procura a wake
+        // word primeiro e desiste na hora se ela não estiver lá (ver
+        // CLAUDE.md). Bug real que isso corrige: a versão anterior
+        // mandava `command` puro, então o recurso não funcionava NEM
+        // UMA VEZ, mesmo compilado e mesmo com o parâmetro `command`
+        // capturado certinho pela Siri — faltava isto, não o
+        // binding do parâmetro.
+        let mensagem = "\(wakeWord) \(command) over"
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.httpBody = command.data(using: .utf8)
+        request.httpBody = mensagem.data(using: .utf8)
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
