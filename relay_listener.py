@@ -211,6 +211,7 @@ class RelayListener:
         while self.running:
             try:
                 url = self._subscribe_url(offline_desde)
+                recuperando = "since=" in url
                 with requests.get(url, stream=True, timeout=(10, 90)) as resp:
                     resp.raise_for_status()
                     backoff_seconds = 5  # reconectou de verdade, reseta o backoff
@@ -234,6 +235,17 @@ class RelayListener:
                             continue  # ignora "open"/keepalive, só processa mensagem
                         text = event.get("message", "")
                         if not text:
+                            continue
+                        # Numa conexão de RECUPERAÇÃO, a idade de
+                        # cada mensagem é conferida contra o mesmo
+                        # teto. A âncora sozinha não basta: ela diz
+                        # "desde qual mensagem", não "de quando" — se o
+                        # Mac ficou ligado e ocioso por horas antes de
+                        # cair, tudo depois dela ainda é antigo. Só na
+                        # recuperação, nunca ao vivo: relógio do Mac
+                        # adiantado em relação ao do servidor
+                        # descartaria mensagem boa.
+                        if recuperando and self._velha_demais(event):
                             continue
                         # Uma mensagem repetida pelo `since=` da
                         # reconexão não pode abrir app/colar/mandar de
@@ -303,11 +315,33 @@ class RelayListener:
         if self.backlog_max_seconds <= 0:
             return base
         if time.monotonic() - offline_desde > self.backlog_max_seconds:
+            # Queda longa demais: além de não pedir histórico agora, a
+            # âncora é DESCARTADA. Sem isso ela ficava guardada e o
+            # próximo piscar curto de conexão — 5 segundos — pedia
+            # `since=` a partir dela mesma assim, reentregando o
+            # backlog inteiro que este teto tinha acabado de recusar.
+            # O teto virava um adiamento, não um limite.
+            self._last_message_id = None
             return base
         # O id vem do JSON do servidor, então nunca entra cru na URL:
         # um `&` ou `#` ali dentro viraria outro parâmetro (ou cortaria
         # a query) numa requisição que este app faz sozinho, em loop.
         return f"{base}?since={urllib.parse.quote(str(self._last_message_id), safe='')}"
+
+    def _velha_demais(self, event) -> bool:
+        """A mensagem é mais antiga que a janela de recuperação?
+
+        Usa o campo `time` do ntfy (segundos desde a época). Sem ele
+        (formato inesperado), responde False: recusar mensagem por não
+        conseguir datar seria pior que entregar — o teto já limitou a
+        janela pedida.
+        """
+        if self.backlog_max_seconds <= 0:
+            return False
+        quando = event.get("time")
+        if not isinstance(quando, (int, float)):
+            return False
+        return (time.time() - quando) > self.backlog_max_seconds
 
     def stop(self):
         self.running = False

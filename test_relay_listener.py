@@ -473,3 +473,43 @@ class CabecalhoMalformadoTest(unittest.TestCase):
             url = relay._subscribe_url(0.0)
         self.assertNotIn("&c=", url)
         self.assertIn("since=a%20b%26c%3Dd", url)
+
+
+class RecuperacaoLimitadaPorIdadeTest(unittest.TestCase):
+    """O teto de recuperação tem que ser um LIMITE, não um adiamento."""
+
+    def _relay(self, **kw):
+        session = MagicMock()
+        session.dictating = False
+        return RelayListener(session, topic="topico", **kw)
+
+    def test_queda_longa_descarta_a_ancora(self):
+        # Sem descartar, o próximo piscar de 5s pedia `since=` a partir
+        # da mesma âncora e reentregava o backlog que o teto tinha
+        # acabado de recusar.
+        relay = self._relay(backlog_max_seconds=300)
+        relay._last_message_id = "abc123"
+        with patch("relay_listener.time.monotonic", return_value=1000.0):
+            relay._subscribe_url(5.0)          # queda longa: recusa
+        self.assertIsNone(relay._last_message_id)
+        with patch("relay_listener.time.monotonic", return_value=1006.0):
+            url = relay._subscribe_url(1001.0)  # piscar curto logo depois
+        self.assertNotIn("since=", url)
+
+    def test_mensagem_velha_demais_nao_e_reexecutada(self):
+        relay = self._relay(backlog_max_seconds=300)
+        with patch("relay_listener.time.time", return_value=10_000.0):
+            self.assertTrue(relay._velha_demais({"time": 9_000.0}))
+            self.assertFalse(relay._velha_demais({"time": 9_900.0}))
+
+    def test_sem_data_a_mensagem_passa(self):
+        # Recusar por não conseguir datar seria pior que entregar — a
+        # janela pedida já foi limitada pelo teto.
+        relay = self._relay()
+        self.assertFalse(relay._velha_demais({}))
+        self.assertFalse(relay._velha_demais({"time": "ontem"}))
+
+    def test_com_recuperacao_desligada_nada_e_descartado_por_idade(self):
+        relay = self._relay(backlog_max_seconds=0)
+        with patch("relay_listener.time.time", return_value=10_000.0):
+            self.assertFalse(relay._velha_demais({"time": 1.0}))

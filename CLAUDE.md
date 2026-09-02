@@ -300,7 +300,19 @@ não bug daqui).
   Mac antigo entende as mensagens normais (nenhuma regressão), mas
   continua barrando "coding is hard", porque quem lê o cabeçalho é o
   lado do Mac. Ou seja, o `.app` precisa ser recompilado/reinstalado
-  pra essa correção valer de verdade.
+  pra essa correção valer de verdade. Duas arestas conhecidas e
+  aceitas dessa janela de transição, as duas COSMÉTICAS (texto a mais
+  no chat, nunca conteúdo perdido) e as duas resolvidas por atualizar
+  o Mac — que é necessário de qualquer forma: (1) telefone novo + Mac
+  velho + um ditado do MIC já aberto cola a linha do cabeçalho junto,
+  porque o Mac velho não sabe o que ela é (nenhuma mudança no Mac
+  conserta isso — o ponto é justamente que ele é a metade não
+  atualizada); (2) uma wake word no telefone TOTALMENTE diferente da
+  do Mac (não um erro de digitação — o casamento é fuzzy e tolera
+  "Vesper"/"whisper") faz o protocolo ser colado junto, já que não há
+  como saber que aquela primeira palavra era wake word. Antes essa
+  segunda falhava CALADA, sem abrir nada; hoje pelo menos é visível e
+  se explica sozinha.
 - **Do texto do relay, só o PREFIXO de protocolo é removido — nunca um
   gatilho achado no meio** (`dictation._strip_leading_trigger()`). A
   primeira versão disto usava a decisão do roteador, que procura o
@@ -315,6 +327,18 @@ não bug daqui).
   própria wake word, então trocá-la no Mac pelo menu sem atualizar o
   link deixava os dois diferentes — e aí o protocolo inteiro
   ("Vesper claude ") era colado no chat como se fosse fala.
+- **A janela de recuperação do relay é um LIMITE, não um adiamento.**
+  Duas correções que só apareceram revendo o próprio diff: (a) quando o
+  teto RECUSA um replay por queda longa, a âncora
+  (`_last_message_id`) é DESCARTADA — sem isso ela ficava guardada e o
+  próximo piscar de 5 segundos pedia `since=` a partir dela mesmo
+  assim, reentregando exatamente o backlog que o teto tinha acabado de
+  recusar; (b) numa conexão de recuperação, a IDADE de cada mensagem é
+  conferida (campo `time` do ntfy), porque a âncora diz "desde qual
+  mensagem", não "de quando" — Mac ligado e ocioso por horas antes de
+  cair deixa tudo depois da âncora igualmente antigo. A checagem de
+  idade vale SÓ na recuperação, nunca ao vivo: relógio do Mac
+  adiantado em relação ao do servidor descartaria mensagem boa.
 - **A trava de `RELAY_BLOCKED_AIS` mora DENTRO do lock da sessão**
   (`DictationSession.handle_complete(..., blocked_ais=...)`), não num
   `if` antes da chamada. Fora dele havia uma janela real: o relay
@@ -925,7 +949,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 398 testes no total. Rodar com:
+- `test_*.py` — 402 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que

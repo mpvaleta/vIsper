@@ -978,6 +978,17 @@ class VisperApp(rumps.App):
             return
 
         if save_settings({"NTFY_TOPIC": novo}):
+            # Vale JÁ na memória, do mesmo jeito que _apply_languages()
+            # faz com o idioma. Sem isto, reabrir o menu logo depois de
+            # GERAR um tópico mostrava "(off — iPhone can't reach this
+            # Mac)" — e se a cópia pro clipboard tivesse falhado, esse
+            # era o único lugar onde o tópico recém-criado ainda
+            # existia na tela. A pessoa concluiria que não salvou e
+            # geraria outro, trocando o tópico que ela talvez já
+            # tivesse digitado no telefone. (O relay em si só passa a
+            # ouvir o tópico novo ao reabrir o app — é o que o alerta
+            # abaixo diz.)
+            config.NTFY_TOPIC = novo
             # Mostra o tópico e põe no clipboard: ele precisa ser
             # digitado no telefone, e são 30+ caracteres aleatórios —
             # copiar à mão da tela é onde o erro de digitação mora.
