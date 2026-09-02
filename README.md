@@ -124,6 +124,8 @@ Como ler quando algo não funcionou:
 | `heard` certo, nenhum `→` | Ele ouviu, mas não reconheceu o comando |
 | `heard` já torto | Transcrição — veja "Se ele não te reconhece" |
 | `heard` com `[en]` falando português | Idioma — veja "Só funciona em inglês" |
+| `phone` sem nenhum `→` depois | A mensagem do iPhone chegou, mas não bateu com nada — quase sempre wake word diferente entre telefone e Mac |
+| Nenhum `phone`, mesmo mandando do iPhone | Não chegou: tópico diferente entre os dois, ou o relay não está ligado |
 
 Fica só na memória do app, nunca em arquivo: ele escuta o tempo todo,
 e gravar tudo o que você fala em disco não seria uma troca justa por
@@ -160,23 +162,41 @@ funciona enquanto a pasta não sair do lugar).
 compilado no Xcode, e com conta grátis o app expira em 7 dias. O
 caminho abaixo não custa nada, não expira, e leva 1 minuto.
 
+**Instalou pelo DMG** (não tem a pasta do projeto):
+
+1. No menu do vIsper → **iPhone connection…**. Se ainda não houver
+   tópico, digite `new`: ele sorteia um, mostra na tela e copia.
+2. No iPhone, abra `https://mpvaleta.github.io/vIsper/` no Safari e
+   cole o tópico em **Settings**.
+3. Toque em **Compartilhar** → **Adicionar à Tela de Início**.
+
+**Tem a pasta do projeto** (caminho de um passo a menos):
+
 1. No **Mac**, rode `python3 setup_visper.py`. Ele imprime (e copia) um
-   link.
+   link que já leva o tópico dentro.
 2. Mande esse link pro iPhone — AirDrop, Notas, ou uma mensagem pra
    você mesma.
 3. Abra o link **no Safari do iPhone**.
 4. Toque em **Compartilhar** → **Adicionar à Tela de Início**.
 
+Nos dois casos, faça o "Adicionar à Tela de Início" **depois** de o
+tópico já estar salvo: o app da tela de início tem armazenamento
+separado do Safari, e o que atravessa é a URL do atalho.
+
 Vira um ícone que abre como app. Fale e ele manda pro Mac sozinho —
 de qualquer lugar com internet, não só na Wi-Fi de casa.
 
-**Você não precisa apertar "Send to Mac".** Assim que você para de
-falar (ou de digitar), ele espera ~2,5 segundos e começa uma contagem
-de 3 segundos — o botão vira **Tap to cancel** e um anel se fecha em
-volta dele. Não tocou em nada, foi. Isso vale pelos dois caminhos: o
-botão de microfone do app **e** a tecla de microfone do teclado do
-próprio iPhone (que é a que sempre funciona, mesmo quando o iOS não
-dá o reconhecimento de voz pro app). Continuar escrevendo cancela a
+**Você não precisa apertar "Send to Mac".** Nos dois casos o fim é o
+mesmo: uma contagem de 3 segundos em que o botão vira **Tap to
+cancel** e um anel se fecha em volta dele. Não tocou em nada, foi. O
+que muda é o que dispara a contagem:
+
+- **Botão de microfone do app** — a contagem começa assim que o
+  reconhecimento de voz se encerra sozinho.
+- **Tecla de microfone do teclado do iPhone** (ou digitando) — ele
+  espera ~2,5 segundos parado antes de começar a contagem, num total
+  de ~5,5 segundos. Esse é o caminho que sempre funciona, mesmo
+  quando o iOS não dá o reconhecimento de voz pro app. Continuar escrevendo cancela a
 contagem e recomeça a espera, então corrigir uma palavra não te
 obriga a apertar nada. Dá pra desligar tudo isso em **Settings** →
 *Auto-send when you stop*.
@@ -216,8 +236,11 @@ Por isso:
 - Ele fica em `~/Library/Application Support/vIsper/settings.json`,
   **fora do repositório** — este repositório é público, e um `git push`
   distraído publicaria a chave da sua casa.
-- Desconfiou que vazou? Rode o `setup_visper.py` de novo: sorteia
-  outro, e o antigo deixa de valer na hora.
+- Desconfiou que vazou? Troque na hora: menu → **iPhone connection…**,
+  digite `new`, e ele sorteia outro (o antigo deixa de valer assim que
+  você reabre o app). Com a pasta do projeto por perto, `python3
+  setup_visper.py` faz o mesmo e já monta o link do iPhone. Nos dois
+  casos, atualize o telefone com o tópico novo.
 - Por padrão o iPhone **não** pode abrir o Claude Code, porque isso
   abriria o Terminal e digitaria dentro dele — vazar o tópico deixaria
   de ser "digitar num chat" e viraria execução de comando. Pelo
@@ -332,7 +355,7 @@ instalou pelo `.dmg` e não tem o repositório na máquina:
 |---|---|
 | **Wake word…** | A palavra de ativação (precisa reabrir o app) |
 | **Spoken languages…** | Os idiomas que você fala — **vale na hora**, sem reabrir |
-| **iPhone connection…** | O tópico do ntfy que liga o iPhone a este Mac |
+| **iPhone connection…** | O tópico do ntfy que liga o iPhone a este Mac (digite `new` pra sortear um; **precisa reabrir o app**) |
 | **Microphone ▸** | Qual microfone usar (ou detectar sozinho) |
 | **Recent activity…** | Não muda nada — mostra o que ele ouviu e decidiu |
 
@@ -468,8 +491,8 @@ Honestidade sobre o que foi validado de verdade:
 
 | Peça | Como foi validada |
 |---|---|
-| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 308 testes automatizados |
-| App de iPhone (`docs/`) | 39 testes num navegador de verdade (Chromium), a cada push. **O link publicado só atualiza em push pra `main`** — confira a aba Actions se o app parece desatualizado |
+| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 388 testes automatizados |
+| App de iPhone (`docs/`) | 48 testes num navegador de verdade (Chromium), a cada push. **O link publicado só atualiza em push pra `main`** — confira a aba Actions se o app parece desatualizado |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |
 | Microfone, permissões do macOS, barra de menu | Já rodou num Mac de verdade (ícone, escuta, permissões, download do modelo). Falta uma sessão inteira de ponta a ponta sem travar |

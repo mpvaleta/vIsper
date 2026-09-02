@@ -32,6 +32,8 @@ CLAUDE.md); comentários e documentação continuam em português.
 
 import os
 import re
+import secrets
+import subprocess
 import threading
 import time
 from collections import deque
@@ -160,6 +162,43 @@ def _elide(linha, limite=HISTORY_LINE_MAX):
     fim = min(40, max(1, (limite - 3) // 2))
     inicio = max(1, limite - fim - 3)
     return f"{linha[:inicio]}...{linha[-fim:]}"
+
+
+def copiar_para_area_de_transferencia(texto: str) -> bool:
+    """Põe `texto` no clipboard do Mac. Falha em silêncio de propósito.
+
+    É conveniência pura (o tópico também aparece escrito no alerta),
+    então um pbcopy indisponível não pode virar erro na cara de quem
+    acabou de salvar com sucesso."""
+    try:
+        subprocess.run(["pbcopy"], input=texto.encode("utf-8"), check=True)
+        return True
+    except Exception:
+        return False
+
+
+def abrir_painel_de_acessibilidade() -> bool:
+    """Abre Ajustes do Sistema direto no painel de Acessibilidade.
+
+    A URL `x-apple.systempreferences:` é a forma suportada pela Apple
+    de apontar pra um painel específico. Falha em silêncio de
+    propósito: isto é conveniência em cima de um alerta que JÁ explica
+    o caminho por escrito, então um `open` que não funcione (versão de
+    macOS diferente, painel renomeado) não pode virar um segundo erro
+    em cima do primeiro.
+    """
+    try:
+        subprocess.run(
+            [
+                "open",
+                "x-apple.systempreferences:com.apple.preference."
+                "security?Privacy_Accessibility",
+            ],
+            check=True,
+        )
+        return True
+    except Exception:
+        return False
 
 
 class VisperApp(rumps.App):
@@ -841,6 +880,28 @@ class VisperApp(rumps.App):
             novas = []
         else:
             novas = [p.strip().lower() for p in resposta.split(",") if p.strip()]
+
+        # VALIDA ANTES de salvar. Sem isto, um palpite razoável
+        # ("português", "pt-BR", "eng" — todos erros naturais de quem
+        # fala português) era salvo, confirmado com "Languages saved…
+        # It already applies", e só então quebrava: o Whisper levanta
+        # exceção em código desconhecido lá DENTRO do laço de
+        # transcrição, o que derruba a thread de escuta inteira
+        # (_listen_loop_safe pega e avisa, mas a escuta para). O app
+        # ficava mudo minutos depois do ajuste, sem nada ligando as
+        # duas coisas — justo no menu que existe pra consertar "só
+        # entende inglês".
+        invalidos = [c for c in novas if c not in config.SUPPORTED_LANGUAGE_CODES]
+        if invalidos:
+            rumps.alert(
+                "Not a language vIsper understands: "
+                + ", ".join(invalidos)
+                + ".\n\nUse short codes, like “pt” for Portuguese or “en” "
+                "for English — not “pt-BR”, “português” or “eng”.\n\n"
+                "Nothing was changed."
+            )
+            return
+
         if novas == list(config.TRANSCRIPTION_LANGUAGES):
             return
         if not save_settings({"TRANSCRIPTION_LANGUAGES": novas}):
@@ -871,11 +932,11 @@ class VisperApp(rumps.App):
                 "Wake word: "
                 f"{config.WAKE_WORD}\n"
                 f"iPhone topic: {resumo}\n\n"
-                "Paste a new iPhone topic below to change it, or leave it "
-                "empty and press OK to keep things as they are.\n\n"
+                "Paste the topic your phone uses, or type “new” to have "
+                "vIsper generate a fresh random one. Leave it empty and "
+                "press OK to keep things as they are.\n\n"
                 "This topic is a password: anyone who knows it can type "
-                "into this Mac. Generate one with setup_visper.py, or paste "
-                "the one you already use on your phone.\n\n"
+                "into this Mac, from anywhere.\n\n"
                 f"Saved in: {settings_path()}"
             ),
             default_text="",
@@ -890,14 +951,44 @@ class VisperApp(rumps.App):
         novo = resposta.text.strip()
         if not novo:
             return
+
+        # Gerar aqui dentro é o que torna o iPhone utilizável pra quem
+        # instalou pelo .dmg: essa pessoa não tem o repositório nem o
+        # setup_visper.py na máquina, e TODO caminho documentado pra
+        # conseguir um tópico passava por aquele script. Sem isto, a
+        # única saída era inventar o tópico à mão — e um tópico
+        # inventado por humano é justamente o que não pode acontecer,
+        # porque ele é a senha do canal.
+        if novo.lower() in ("new", "novo", "gerar", "generate"):
+            novo = "visper-" + secrets.token_urlsafe(24)
         # Tolera colar a URL inteira do ntfy — é o erro mais provável, e
         # dá pra corrigir sozinho em vez de falhar em silêncio depois.
         novo = re.sub(r"^https?://ntfy\.sh/", "", novo).strip("/")
+        if not novo:
+            # Colar só "https://ntfy.sh/" (sem o tópico) sobrava vazio
+            # aqui e era GRAVADO como vazio — o que DESLIGA o relay,
+            # enquanto o alerta dizia que tinha salvado. Desligar tem
+            # que ser uma escolha, não um efeito colateral de colar a
+            # coisa errada.
+            rumps.alert(
+                "That looks like the ntfy address without a topic at the "
+                "end.\n\nPaste the topic itself (or type “new” to "
+                "generate one). Nothing was changed."
+            )
+            return
 
         if save_settings({"NTFY_TOPIC": novo}):
+            # Mostra o tópico e põe no clipboard: ele precisa ser
+            # digitado no telefone, e são 30+ caracteres aleatórios —
+            # copiar à mão da tela é onde o erro de digitação mora.
+            copiado = copiar_para_area_de_transferencia(novo)
             rumps.alert(
-                "Saved. Quit and reopen vIsper for the iPhone connection "
-                "to start using the new topic."
+                "iPhone topic saved:\n\n"
+                f"{novo}\n\n"
+                + ("Copied to the clipboard. " if copiado else "")
+                + "Use this same topic on your phone.\n\n"
+                "Quit and reopen vIsper for the iPhone connection to "
+                "start using it."
             )
         else:
             rumps.alert(
@@ -971,12 +1062,31 @@ class VisperApp(rumps.App):
             # (_listen_loop_safe é o alvo de threading.Thread em
             # start_listening()). Mesmo despacho de _set_state(); ver
             # o comentário lá pro porquê.
+            # Abre o painel certo dos Ajustes em vez de só descrever o
+            # caminho. Mínimo de atrito é critério de arquitetura aqui,
+            # e este é o erro mais provável da primeira execução: quem
+            # está tentando usar de mãos ocupadas não deveria ter que
+            # navegar quatro níveis de menu a partir de um texto.
+            # O texto muda conforme o painel abriu ou não: afirmar
+            # "já está aberto" quando o `open` falhou deixa a pessoa
+            # procurando uma janela que não existe, e sem o caminho
+            # escrito ela fica sem saída nenhuma.
+            if abrir_painel_de_acessibilidade():
+                onde = (
+                    "System Settings should now be open on Privacy & "
+                    "Security › Accessibility — turn vIsper on there, "
+                    "then start listening again."
+                )
+            else:
+                onde = (
+                    "Open System Settings › Privacy & Security › "
+                    "Accessibility and turn vIsper on, then start "
+                    "listening again."
+                )
             AppHelper.callAfter(
                 rumps.alert,
                 "vIsper needs Accessibility permission to type into your AI "
-                "chat.\n\n"
-                "Open System Settings › Privacy & Security › Accessibility "
-                "and turn vIsper on, then start listening again.\n\n"
+                "chat.\n\n" + onde + "\n\n"
                 f"({exc})",
             )
         except Exception as exc:

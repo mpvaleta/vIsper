@@ -199,132 +199,277 @@ class TravasDoRelayTest(unittest.TestCase):
     O tópico do ntfy é a única senha do canal. Estas travas são a
     SEGUNDA, pro caso da primeira falhar — ver config.RELAY_BLOCKED_AIS
     e RELAY_MAX_MESSAGE_CHARS.
+
+    Usa DictationSession e CommandRouter DE VERDADE, e mede o que
+    aconteceu de fato (abriu? colou? apertou Enter?), não quais métodos
+    foram chamados. Com uma sessão dublada, a versão anterior destes
+    testes passou verde enquanto a trava estava DESLIGADA por um
+    engano de dublê — exatamente o tipo de falso OK que não se pode
+    ter numa checagem de segurança.
     """
 
-    def _session(self, dictating=False, preview_ai=None):
-        session = MagicMock()
-        session.dictating = dictating
-        session.router.preview.return_value = preview_ai
-        session.handle_complete.return_value = "ok"
-        return session
+    def _montar(self, blocked=("claude_code",), max_chars=None):
+        self.abertos = []
+        self.colados = []
+        self.enters = []
+        ai_actions = {
+            nome: (lambda n=nome: self.abertos.append(n))
+            for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+        }
+        session = DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: self.enters.append(1),
+        )
+        kwargs = {"blocked_ais": list(blocked)}
+        if max_chars is not None:
+            kwargs["max_chars"] = max_chars
+        return RelayListener(session, topic="t", **kwargs), session
+
+    def _nada_aconteceu(self):
+        self.assertEqual(self.abertos, [])
+        self.assertEqual(self.colados, [])
+        self.assertEqual(self.enters, [])
 
     def test_claude_code_pelo_iphone_e_recusado(self):
         # Abrir o Terminal e digitar nele é execução de comando, não
         # "digitar num chat de IA" — a diferença de gravidade entre as
         # duas é grande demais pra deixar no mesmo balde.
-        session = self._session(preview_ai="claude_code")
-        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
-
+        listener, _ = self._montar()
         resultado = listener._handle_message("vIsper claude code rm -rf algo over")
+        self._nada_aconteceu()
+        self.assertIn("claude_code", resultado)
 
-        session.handle_complete.assert_not_called()
+    def test_claude_code_declarado_no_cabecalho_tambem_e_recusado(self):
+        listener, _ = self._montar()
+        resultado = listener._handle_message("#visper-ai=claude_code\nvIsper x over")
+        self._nada_aconteceu()
+        self.assertIn("claude_code", resultado)
+
+    def test_a_trava_vale_mesmo_com_a_thread_do_mic_fechando_no_meio(self):
+        """A checagem mora DENTRO do lock, junto da decisão.
+
+        Fora dele havia uma janela real: o relay pulava a checagem
+        quando um ditado estava aberto, mas entre ler `dictating` e
+        agir o ditado do mic podia FECHAR — e a mensagem abria
+        justamente o alvo proibido."""
+        listener, session = self._montar()
+        session.dictating = True  # como se o mic tivesse acabado de abrir
+        session.buffer = []
+        session.dictating = False  # ...e fechado antes da mensagem ser tratada
+        resultado = listener._handle_message("vIsper claude code rm -rf algo over")
+        self._nada_aconteceu()
         self.assertIn("claude_code", resultado)
 
     def test_recusa_explica_em_vez_de_sumir_calada(self):
         # Mensagem sumindo sem explicação é indistinguível de "o relay
         # não está funcionando".
-        session = self._session(preview_ai="claude_code")
-        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
+        listener, _ = self._montar()
         self.assertTrue(listener._handle_message("vIsper claude code oi"))
 
     def test_ia_permitida_passa_normalmente(self):
-        session = self._session(preview_ai="claude")
-        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
-
+        listener, _ = self._montar()
         resultado = listener._handle_message("vIsper claude qual é a previsão over")
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["qual é a previsão"])
+        self.assertEqual(len(self.enters), 1)
+        self.assertIn("sent:", resultado)
 
-        session.handle_complete.assert_called_once_with(
-            "vIsper claude qual é a previsão over"
-        )
-        self.assertEqual(resultado, "ok")
-
-    def test_com_ditado_ja_aberto_nao_consulta_o_roteador(self):
-        # Texto durante o ditado é CONTEÚDO, não passa pelo roteador —
-        # consultar preview() aqui poderia barrar uma frase legítima só
-        # por ela conter as palavras "claude code".
-        session = self._session(dictating=True, preview_ai="claude_code")
-        listener = RelayListener(session, topic="t", blocked_ais=["claude_code"])
-
-        listener._handle_message("preciso revisar o claude code amanhã")
-
-        session.router.preview.assert_not_called()
-        session.handle_complete.assert_called_once()
+    def test_com_ditado_ja_aberto_o_texto_e_conteudo_e_nao_alvo(self):
+        # Texto durante o ditado é CONTEÚDO — uma frase legítima que
+        # por acaso cite "claude code" não pode ser barrada.
+        listener, session = self._montar()
+        session.handle("vIsper claude")
+        self.abertos.clear()
+        listener._handle_message("preciso revisar o claude code amanhã over")
+        self.assertEqual(self.abertos, [])
+        self.assertEqual(self.colados, ["preciso revisar o claude code amanhã"])
 
     def test_lista_de_bloqueio_vazia_libera_tudo(self):
-        session = self._session(preview_ai="claude_code")
-        listener = RelayListener(session, topic="t", blocked_ais=[])
-        listener._handle_message("vIsper claude code oi")
-        session.handle_complete.assert_called_once()
+        listener, _ = self._montar(blocked=())
+        listener._handle_message("vIsper claude code oi over")
+        self.assertEqual(self.abertos, ["claude_code"])
 
     def test_mensagem_gigante_e_cortada_antes_de_ser_colada(self):
-        session = self._session(preview_ai="claude")
-        listener = RelayListener(session, topic="t", max_chars=50)
-
+        listener, _ = self._montar(max_chars=50)
         resultado = listener._handle_message("x" * 51)
-
-        session.handle_complete.assert_not_called()
-        self.assertIn("grande demais", resultado)
-
-    def test_mensagem_no_limite_exato_passa(self):
-        session = self._session(preview_ai="claude")
-        listener = RelayListener(session, topic="t", max_chars=50)
-        listener._handle_message("x" * 50)
-        session.handle_complete.assert_called_once()
+        self._nada_aconteceu()
+        self.assertIn("too large", resultado)
 
 
-class OnMessageHookTest(unittest.TestCase):
-    """
-    on_message existe pro "Recent activity" do main.py conseguir
-    mostrar o que o iPhone mandou mesmo quando NADA bateu com nada
-    (ex.: wake word desatualizada no telefone) — sem isto, esse caso
-    não deixava rastro nenhum, justo a ferramenta feita pra
-    diagnosticar por que "não funcionou".
+class CabecalhoDeIaTest(unittest.TestCase):
+    """A primeira linha "#visper-ai=<id>" carrega a IA já resolvida.
+
+    Ver CLAUDE.md (limitação 13) e RelayListener._split_ai_header():
+    codificar essa certeza como texto livre fazia a trava de segurança
+    barrar mensagens legítimas.
     """
 
-    def _session(self, dictating=False, preview_ai=None, handle_result="ok"):
+    def _build(self, blocked=("claude_code",)):
+        self.abertos = []
+        self.colados = []
+        ai_actions = {
+            nome: (lambda n=nome: self.abertos.append(n))
+            for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+        }
+        session = DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: None,
+        )
+        return RelayListener(session, topic="t", blocked_ais=list(blocked)), session
+
+    def test_cabecalho_resolve_a_ia_sem_passar_pelo_roteador(self):
+        relay, _ = self._build()
+        relay._handle_message("#visper-ai=claude\nvIsper claude code review isso over")
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["code review isso"])
+
+    def test_sem_cabecalho_a_mesma_mensagem_era_barrada(self):
+        """Prova que o bug era real: sem a linha do cabeçalho, o
+        roteador lê "claude code" e a trava recusa tudo."""
+        relay, _ = self._build()
+        resultado = relay._handle_message("vIsper claude code review isso over")
+        self.assertIn("cannot be opened", resultado)
+        self.assertEqual(self.abertos, [])
+        self.assertEqual(self.colados, [])
+
+    def test_ia_bloqueada_continua_bloqueada_mesmo_declarada(self):
+        """A trava passa a olhar o alvo DECLARADO — que é exatamente o
+        que seria aberto —, então declarar não é jeito de escapar dela."""
+        relay, _ = self._build()
+        resultado = relay._handle_message("#visper-ai=claude_code\nvIsper algo over")
+        self.assertIn("claude_code", resultado)
+        self.assertIn("cannot be opened", resultado)
+        self.assertEqual(self.abertos, [])
+
+    def test_cabecalho_com_ia_inventada_cai_no_caminho_antigo(self):
+        relay, _ = self._build()
+        relay._handle_message("#visper-ai=nao_existe\nvIsper claude oi over")
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["oi"])
+
+    def test_mensagem_sem_cabecalho_nao_muda_de_comportamento(self):
+        relay, _ = self._build()
+        relay._handle_message("vIsper gemini me explica isso over")
+        self.assertEqual(self.abertos, ["gemini"])
+        self.assertEqual(self.colados, ["me explica isso"])
+
+    def test_split_devolve_o_texto_inteiro_quando_nao_ha_cabecalho(self):
+        relay, _ = self._build()
+        self.assertEqual(
+            relay._split_ai_header("vIsper claude oi"), (None, "vIsper claude oi")
+        )
+
+
+class ReconexaoComSinceTest(unittest.TestCase):
+    """Mensagem publicada enquanto o Mac está reconectando não pode
+    sumir — o telefone mostra "Sent to your Mac" de qualquer jeito
+    (o POST pro ntfy deu 200), então uma perda dessas é
+    indistinguível de "o Mac ignorou o que eu falei"."""
+
+    def _relay(self, **kw):
         session = MagicMock()
-        session.dictating = dictating
-        session.router.preview.return_value = preview_ai
-        session.handle_complete.return_value = handle_result
-        return session
+        session.dictating = False
+        return RelayListener(session, topic="topico", **kw)
 
-    def test_dispara_com_o_texto_bruto_quando_bate(self):
-        session = self._session(preview_ai="claude")
-        recebidos = []
-        listener = RelayListener(session, topic="t", on_message=recebidos.append)
-        listener._handle_message("vIsper claude qual é a previsão over")
-        self.assertEqual(recebidos, ["vIsper claude qual é a previsão over"])
+    def test_primeira_conexao_nunca_pede_historico(self):
+        """Abrir o app não pode executar o que foi dito antes dele
+        existir."""
+        relay = self._relay()
+        self.assertEqual(relay._subscribe_url(None), "https://ntfy.sh/topico/json")
 
-    def test_dispara_mesmo_quando_nada_bate(self):
-        # O caso real que motivou isto: wake word errada/desatualizada
-        # -> handle_complete() devolve None -> sem este hook, nada
-        # registraria que a mensagem sequer chegou.
-        session = self._session(preview_ai=None, handle_result=None)
-        recebidos = []
-        listener = RelayListener(session, topic="t", on_message=recebidos.append)
-        listener._handle_message("iris claude oi over")
-        self.assertEqual(recebidos, ["iris claude oi over"])
+    def test_sem_mensagem_vista_ainda_nao_pede_historico(self):
+        relay = self._relay()
+        self.assertEqual(relay._subscribe_url(0.0), "https://ntfy.sh/topico/json")
 
-    def test_dispara_mesmo_quando_bloqueado_pelo_relay(self):
-        session = self._session(preview_ai="claude_code")
-        recebidos = []
-        listener = RelayListener(
-            session, topic="t", blocked_ais=["claude_code"], on_message=recebidos.append
+    def test_reconexao_curta_recupera_a_partir_da_ultima_vista(self):
+        relay = self._relay()
+        relay._last_message_id = "abc123"
+        with patch("relay_listener.time.monotonic", return_value=10.0):
+            url = relay._subscribe_url(5.0)
+        self.assertEqual(url, "https://ntfy.sh/topico/json?since=abc123")
+
+    def test_queda_longa_demais_nao_reexecuta_comando_velho(self):
+        relay = self._relay(backlog_max_seconds=300)
+        relay._last_message_id = "abc123"
+        with patch("relay_listener.time.monotonic", return_value=1000.0):
+            url = relay._subscribe_url(5.0)
+        self.assertEqual(url, "https://ntfy.sh/topico/json")
+
+    def test_recuperacao_pode_ser_desligada(self):
+        relay = self._relay(backlog_max_seconds=0)
+        relay._last_message_id = "abc123"
+        with patch("relay_listener.time.monotonic", return_value=6.0):
+            self.assertEqual(
+                relay._subscribe_url(5.0), "https://ntfy.sh/topico/json"
+            )
+
+    def test_mensagem_repetida_pelo_since_nao_e_executada_duas_vezes(self):
+        """O ntfy pode reentregar a própria âncora do since=, e
+        reexecutar (abrir app, colar, apertar Enter) é irreversível."""
+        session = MagicMock()
+        session.dictating = False
+        session.handle_complete.return_value = "ok"
+        relay = RelayListener(session, topic="t")
+
+        linhas = [
+            json.dumps({"event": "message", "id": "m1", "message": "vIsper claude oi"}),
+            json.dumps({"event": "message", "id": "m1", "message": "vIsper claude oi"}),
+            json.dumps({"event": "message", "id": "m2", "message": "vIsper claude tchau"}),
+        ]
+
+        def parar():
+            relay.running = False
+
+        with patch("relay_listener.requests.get") as get:
+            get.return_value = FakeResponse(
+                [l.encode() for l in linhas], on_exhausted=parar
+            )
+            relay.listen_forever()
+
+        self.assertEqual(session.handle_complete.call_count, 2)
+        self.assertEqual(relay._last_message_id, "m2")
+
+
+class CabecalhoMalformadoTest(unittest.TestCase):
+    """Um cabeçalho quebrado não pode virar texto colado no chat.
+
+    O casamento da wake word é FUZZY, e "visper" casa dentro do próprio
+    "#visper-ai=xyz" — então devolver o texto inteiro quando o id não
+    valia fazia o resto do cabeçalho ("ai=xyz") ser colado e o Enter
+    apertado, se houvesse um ditado do mic aberto na hora.
+    """
+
+    def _build(self):
+        self.colados = []
+        ai_actions = {"claude": lambda: None, "claude_code": lambda: None}
+        session = DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: None,
         )
-        listener._handle_message("vIsper claude code rm -rf algo over")
-        self.assertEqual(recebidos, ["vIsper claude code rm -rf algo over"])
+        return RelayListener(session, topic="t"), session
 
-    def test_dispara_mesmo_quando_grande_demais(self):
-        session = self._session(preview_ai="claude")
-        recebidos = []
-        listener = RelayListener(
-            session, topic="t", max_chars=10, on_message=recebidos.append
-        )
-        listener._handle_message("x" * 20)
-        self.assertEqual(recebidos, ["x" * 20])
+    def test_cabecalho_quebrado_sozinho_nao_cola_nada(self):
+        relay, session = self._build()
+        session.handle("vIsper claude")
+        session.handle("conteúdo do mic")
+        relay._handle_message("#visper-ai=xyz")
+        self.assertEqual(self.colados, [])
+        self.assertTrue(session.dictating)
 
-    def test_sem_callback_nao_quebra_nada(self):
-        session = self._session(preview_ai="claude")
-        listener = RelayListener(session, topic="t")
-        listener._handle_message("vIsper claude oi over")
-        session.handle_complete.assert_called_once()
+    def test_cabecalho_quebrado_com_conteudo_ainda_funciona(self):
+        relay, _ = self._build()
+        relay._handle_message("#visper-ai=xyz\nvIsper claude oi over")
+        self.assertEqual(self.colados, ["oi"])
+
+    def test_id_do_ntfy_nunca_entra_cru_na_url(self):
+        # O id vem do JSON do servidor; um "&" ali viraria outro
+        # parâmetro numa requisição que o app faz sozinho, em loop.
+        relay, _ = self._build()
+        relay._last_message_id = "a b&c=d"
+        with patch("relay_listener.time.monotonic", return_value=1.0):
+            url = relay._subscribe_url(0.0)
+        self.assertNotIn("&c=", url)
+        self.assertIn("since=a%20b%26c%3Dd", url)

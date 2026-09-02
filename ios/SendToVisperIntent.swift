@@ -12,8 +12,12 @@
 //       este arquivo a ele.
 //    2. Confirmar que compila e que o App Intent aparece no app
 //       Atalhos.
-//    3. Trocar ntfyTopic abaixo pelo mesmo valor de NTFY_TOPIC em
-//       config.py, no lado do Mac.
+//    3. Trocar ntfyTopic abaixo pelo tópico de verdade do Mac. NÃO é
+//       o NTFY_TOPIC de config.py: aquele arquivo é público e o valor
+//       lá é sempre "". O de verdade está no menu do app (vIsper →
+//       "iPhone connection…", que também sorteia um novo se você
+//       digitar "new"), ou em
+//       ~/Library/Application Support/vIsper/settings.json.
 //    4. Testar de ponta a ponta: disparar pela Siri/Atalhos/Botão de
 //       Ação e confirmar que chega no relay_listener.py do Mac.
 //    5. Conferir especificamente se `command` é pedido/preenchido
@@ -21,14 +25,13 @@
 //       em VisperShortcuts abaixo) — terceira frase adicionada como
 //       caminho alternativo mais garantido, mas nenhuma das três foi
 //       testada de verdade ainda.
-//    6. Dizer pra quem for usar: o `command` falado/ditado precisa
-//       COMEÇAR com o nome de uma IA configurada (ex.: "Mandar claude
-//       qual é a previsão do tempo pro vIsper") — perform() já gruda
-//       a wake word no início e "over" no fim (ver abaixo), mas o
-//       roteador do Mac (command_router.py) só abre uma IA se um nome
-//       reconhecido vier logo depois da wake word; sem isso a mensagem
-//       chega no Mac e não abre nada, sem erro nenhum (mesmo problema
-//       documentado em ATALHO_IPHONE.md pro caminho do app Atalhos).
+//    6. Conferir contra qual versão do Mac isto vai rodar. Dizer o
+//       nome de uma IA no `command` passou a ser OPCIONAL: sem nenhum
+//       nome reconhecível, o Mac abre a DEFAULT_AI, igual a falar só a
+//       wake word no microfone (ver CommandRouter.split_complete()).
+//       Num Mac numa versão ANTERIOR a essa, a mesma mensagem não
+//       abria nada e falhava calada — se for esse o caso, ou atualize
+//       o app do Mac, ou instrua a começar dizendo o nome da IA.
 //
 //  Verificado de rede (deste ambiente, sem Mac): tentei bater no
 //  ntfy.sh de verdade pra validar as suposições de formato daqui
@@ -62,11 +65,15 @@ struct SendToVisperIntent: AppIntent {
 
     // TODO antes de usar de verdade: tirar esse hardcode daqui.
     // Ideias: tela simples de config dentro do app, ou Keychain.
-    // Tem que ser o MESMO valor de NTFY_TOPIC em config.py (Mac) — ou,
-    // mais precisamente, o valor de VERDADE (settings.json ou o link
-    // impresso por setup_visper.py — config.py em si SEMPRE mostra ""
-    // no repositório, ver ATALHO_IPHONE.md pro mesmo erro já corrigido
-    // lá).
+    //
+    // Tem que ser o tópico de VERDADE do Mac — que NÃO é o NTFY_TOPIC
+    // de config.py (esse arquivo é público, e o valor lá é sempre "").
+    // Pegue no menu do app do Mac ("iPhone connection…") ou em
+    // ~/Library/Application Support/vIsper/settings.json.
+    //
+    // Enquanto estiver com o valor de exemplo abaixo, este intent
+    // publica num tópico que ninguém escuta — e, pior, num tópico
+    // PÚBLICO e adivinhável. Não use assim.
     private let ntfyServer = "https://ntfy.sh"
     private let ntfyTopic = "TROQUE_AQUI_PELO_MESMO_TOPICO_DO_MAC"
 
@@ -90,6 +97,10 @@ struct SendToVisperIntent: AppIntent {
         // UMA VEZ, mesmo compilado e mesmo com o parâmetro `command`
         // capturado certinho pela Siri — faltava isto, não o
         // binding do parâmetro.
+        //
+        // O nome da IA NÃO precisa vir no `command`: sem nenhum nome
+        // reconhecível, o Mac abre a DEFAULT_AI (ver o item 6 do
+        // checklist no topo).
         let mensagem = "\(wakeWord) \(command) over"
 
         var request = URLRequest(url: url)

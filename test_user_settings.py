@@ -296,3 +296,26 @@ class TranscriptionLanguagesTest(SettingsTestCase):
         finally:
             os.environ.pop(user_settings.ENV_OVERRIDE, None)
             importlib.reload(config)
+
+
+class CodigoDeIdiomaEstritoTest(unittest.TestCase):
+    """O validador compara EXATO, sem normalizar.
+
+    Aceitar "PT" na checagem e gravar "PT" mesmo assim reproduzia
+    exatamente a falha que a validação existe pra impedir: o Whisper
+    levanta exceção em código desconhecido lá dentro do laço de
+    transcrição, derrubando a escuta inteira.
+    """
+
+    def test_aceita_os_codigos_de_verdade(self):
+        self.assertTrue(user_settings.VALIDATORS["TRANSCRIPTION_LANGUAGES"](["pt", "en"]))
+        self.assertTrue(user_settings.VALIDATORS["TRANSCRIPTION_LANGUAGES"]([]))
+
+    def test_recusa_maiuscula(self):
+        self.assertFalse(user_settings.VALIDATORS["TRANSCRIPTION_LANGUAGES"](["PT"]))
+        self.assertFalse(user_settings.VALIDATORS["TRANSCRIPTION_LANGUAGES"](["pt", "EN"]))
+
+    def test_recusa_os_palpites_naturais_que_quebram_o_whisper(self):
+        for ruim in (["pt-BR"], ["eng"], ["português"], ["portuguese"], ["pt_br"]):
+            with self.subTest(valor=ruim):
+                self.assertFalse(user_settings.VALIDATORS["TRANSCRIPTION_LANGUAGES"](ruim))

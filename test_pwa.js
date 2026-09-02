@@ -102,8 +102,14 @@ const servidor = http.createServer((req, res) => {
   const env = ctx.enviados[0] || {};
   check('POST no tópico certo', (env.url || '').endsWith(TOPICO), env.url);
   check('método POST', env.metodo === 'POST', env.metodo);
-  check('mensagem = wake + ia + conteúdo + over',
-    env.corpo === 'Vésper claude qual é a previsão do tempo over', env.corpo);
+  // Duas linhas: a IA resolvida (fora da prosa, pro Mac nao precisar
+  // adivinhar por texto livre) e a mensagem completa de sempre, que
+  // mantem um Mac ainda nao atualizado funcionando.
+  check('primeira linha declara a IA escolhida',
+    (env.corpo || '').split('\n')[0] === '#visper-ai=claude', env.corpo);
+  check('segunda linha = wake + ia + conteúdo + over',
+    (env.corpo || '').split('\n')[1] ===
+      'Vésper claude qual é a previsão do tempo over', env.corpo);
   check('campo limpo depois de mandar',
     (await pagina.inputValue('#text')) === '');
 
@@ -115,7 +121,8 @@ const servidor = http.createServer((req, res) => {
   await pagina.click('#btn-send');
   await pagina.waitForTimeout(400);
   check('usa a IA escolhida',
-    (ctx.enviados[0] || {}).corpo === 'Vésper perplexity quem ganhou ontem over',
+    (ctx.enviados[0] || {}).corpo ===
+      '#visper-ai=perplexity\nVésper perplexity quem ganhou ontem over',
     (ctx.enviados[0] || {}).corpo);
 
   const escolhida = await pagina.evaluate(() =>
@@ -232,7 +239,8 @@ const servidor = http.createServer((req, res) => {
   check('mandou sem nenhum toque no botao', ctx5.enviados.length === 1,
     `${ctx5.enviados.length}`);
   check('mensagem automatica no mesmo formato do envio manual',
-    (ctx5.enviados[0] || {}).corpo === 'Vésper claude que horas sao over',
+    (ctx5.enviados[0] || {}).corpo ===
+      '#visper-ai=claude\nVésper claude que horas sao over',
     (ctx5.enviados[0] || {}).corpo);
 
   // Continuar escrevendo durante a contagem cancela e rearma — quem
@@ -259,7 +267,7 @@ const servidor = http.createServer((req, res) => {
     `${ctx5.enviados.length}`);
   check('mandou a frase inteira, nao so o pedaco',
     (ctx5.enviados[0] || {}).corpo ===
-      'Vésper claude primeira parte e a segunda over',
+      '#visper-ai=claude\nVésper claude primeira parte e a segunda over',
     (ctx5.enviados[0] || {}).corpo);
 
   // Cancelar de proposito tem que valer: se a ociosidade rearmasse
@@ -293,6 +301,116 @@ const servidor = http.createServer((req, res) => {
       await p5.waitForTimeout(400);
       return ctx5.enviados.length === 1;
     })(), `${ctx5.enviados.length}`);
+
+  // ---------------------------------------------------------------
+  // Um SpeechRecognition falso, controlavel, injetado ANTES do script
+  // da pagina rodar. E a unica forma de exercitar os caminhos de erro
+  // do Web Speech: no Chromium de verdade nao da pra negar o microfone
+  // nem forcar um reconhecimento que trava.
+  console.log('\n10) Ditado do app: corrida de toque duplo, erro e travamento');
+
+  const FAKE_SPEECH = () => {
+    window.__recs = [];
+    function Fake() {
+      this.lang = ''; this.interimResults = false; this.continuous = false;
+      this.started = false; this.aborted = false;
+      window.__recs.push(this);
+    }
+    // start() NAO dispara onstart sozinho — o teste decide quando (ou
+    // se) ele acontece, que e exatamente a janela onde o bug morava.
+    Fake.prototype.start = function () { this.started = true; };
+    Fake.prototype.stop = function () { if (this.onend) this.onend(); };
+    Fake.prototype.abort = function () { this.aborted = true; };
+    window.SpeechRecognition = Fake;
+    window.webkitSpeechRecognition = Fake;
+  };
+
+  async function paginaComSpeechFalso() {
+    const c = await navegador.newContext(devices['iPhone 13']);
+    const pg = await novaPagina(c);
+    await pg.addInitScript(FAKE_SPEECH);
+    await pg.goto(`${base}#t=${TOPICO}`);
+    await pg.waitForTimeout(250);
+    return { c, pg };
+  }
+
+  // (a) Toque duplo antes do onstart nao pode criar dois reconhecimentos.
+  // `recording` so vira true no onstart, que e assincrono — dois toques
+  // rapidos criavam um segundo objeto e o primeiro virava orfao,
+  // continuando a escrever no campo pela propria closure.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.click('#btn-mic');
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(150);
+    const quantos = await pg.evaluate(() => window.__recs.length);
+    check('toque duplo nao cria um segundo reconhecimento', quantos === 1,
+      `${quantos}`);
+    await c.close();
+  }
+
+  // (b) Terminar por ERRO nao pode mandar sozinho o que estava no campo.
+  // onend dispara SEMPRE, inclusive depois de onerror — sem lembrar do
+  // erro, uma falha de microfone virava envio automatico de texto solto.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.fill('#text', 'texto de uma tentativa anterior');
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(100);
+    await pg.evaluate(() => {
+      const r = window.__recs[0];
+      r.onerror({ error: 'not-allowed' });
+      r.onend();
+    });
+    await pg.waitForTimeout(500);
+    check('erro no ditado nao inicia a contagem de envio',
+      await pg.locator('.ring').getAttribute('hidden') !== null);
+    const enviadosDepoisDoErro = c.enviados.length;
+    check('erro no ditado nao manda nada de imediato',
+      enviadosDepoisDoErro === 0, `${enviadosDepoisDoErro}`);
+    check('o aviso de microfone bloqueado continua na tela',
+      (await pg.locator('#status').getAttribute('data-state')) === 'offline',
+      await pg.locator('#status').getAttribute('data-state'));
+    await c.close();
+  }
+
+  // (c) Erro nao pode deixar o texto encalhado: a ociosidade rearma, com
+  // a janela normal de cancelamento.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.fill('#text', 'isso aqui eu digitei');
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(100);
+    await pg.evaluate(() => {
+      const r = window.__recs[0];
+      r.onerror({ error: 'no-speech' });
+      r.onend();
+    });
+    await pg.waitForTimeout(6200);
+    check('depois do erro, a ociosidade ainda manda sozinho',
+      c.enviados.length === 1, `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (d) start() aceito mas NENHUM evento chegando (falha conhecida do
+  // Web Speech no iOS, principalmente na tela de inicio): sem vigia, o
+  // botao ficava preso e nao dava pra tentar de novo.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(3200);   // START_TIMEOUT_MS = 2500
+    check('o vigia solta o botao quando o ditado nao comeca',
+      (await pg.locator('#btn-mic').getAttribute('data-recording')) === 'false',
+      await pg.locator('#btn-mic').getAttribute('data-recording'));
+    check('e aponta pra tecla de microfone do teclado',
+      (await pg.locator('#toast').textContent()).includes('keyboard'),
+      await pg.locator('#toast').textContent());
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(150);
+    const recs = await pg.evaluate(() => window.__recs.length);
+    check('e da pra tentar de novo depois disso', recs === 2, `${recs}`);
+    await c.close();
+  }
 
   await navegador.close();
   servidor.close();

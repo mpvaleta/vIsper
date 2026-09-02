@@ -267,6 +267,112 @@ não bug daqui).
   jogar). Os marcadores dos testes (`"abriu_claude"`, `"mandou_enter"`)
   continuam em português de propósito — são fixture de teste, não UI.
 
+- **A IA escolhida no iPhone viaja RESOLVIDA, não como texto livre**
+  (`#visper-ai=<id>` na primeira linha da mensagem;
+  `RelayListener._split_ai_header()` → `DictationSession.handle_complete(
+  ..., ai_id=...)` → `CommandRouter.open()`). O app de iPhone SABE qual
+  IA a pessoa quer — ela tocou num chip —, mas codificava essa certeza
+  de volta como prosa ("vIsper claude <texto> over") e deixava o
+  roteador de VOZ readivinhar. Aí a regra de desempate por comprimento
+  (que existe por um motivo real do lado da voz: "vIsper claude code
+  também abre um terminal" tem que abrir o Claude Code) lia "claude
+  code" e, como `claude_code` está em `RELAY_BLOCKED_AIS` por
+  segurança, a mensagem inteira era RECUSADA — com o telefone
+  mostrando "Sent to your Mac" do mesmo jeito, porque o POST pro ntfy
+  deu 200. Três detalhes que não podem ser mexidos sem repensar tudo:
+  (a) o `_decide()` NÃO foi tocado — o problema nunca foi a regra de
+  desempate, foi jogar fora uma certeza; (b) o corpo da mensagem
+  continua sendo a string COMPLETA de antes ("<wake> <ia> <texto>
+  over") e o cabeçalho vem ANTES da wake word, então um Mac ainda não
+  atualizado ignora a linha e continua funcionando pelo caminho velho
+  — isso não é zelo à toa: o PWA se atualiza sozinho pelo GitHub
+  Pages e o app do Mac só quando ela reinstala, então "telefone novo +
+  Mac velho" é o estado PROVÁVEL numa atualização; (c) a trava de
+  segurança passou a olhar o alvo DECLARADO
+  (`preview_complete()`), que é exatamente o que vai ser aberto —
+  declarar `claude_code` continua sendo recusado, testado. Ao remover
+  o nome da IA do conteúdo, só os apelidos da IA DECLARADA são
+  considerados, nunca a lista inteira: é isso que desarma a colisão
+  sem tocar no roteador. Medido, não suposto: o gatilho era mais largo
+  que o documentado — o casamento é fuzzy, então "coding is hard"
+  também era descartado. **Atualizar só o telefone não conserta o
+  bug** — verificado rodando o código de HEAD contra o formato novo: um
+  Mac antigo entende as mensagens normais (nenhuma regressão), mas
+  continua barrando "coding is hard", porque quem lê o cabeçalho é o
+  lado do Mac. Ou seja, o `.app` precisa ser recompilado/reinstalado
+  pra essa correção valer de verdade.
+- **Do texto do relay, só o PREFIXO de protocolo é removido — nunca um
+  gatilho achado no meio** (`dictation._strip_leading_trigger()`). A
+  primeira versão disto usava a decisão do roteador, que procura o
+  apelido da IA em QUALQUER lugar: "vIsper me lembra de perguntar pro
+  gemini sobre isso" virava "sobre isso" — palavras somem do meio da
+  frase, e a frase mutilada já foi colada E o Enter já foi apertado
+  quando alguém percebe. É a mesma família do bug de truncamento que
+  motivou `handle_complete()` existir, reintroduzida pela correção
+  dele; achada por revisão adversarial do próprio diff, não em uso. E
+  o prefixo casa com a MESMA tolerância a erro da abertura
+  (`find_trigger_span`, não igualdade exata): o telefone guarda a
+  própria wake word, então trocá-la no Mac pelo menu sem atualizar o
+  link deixava os dois diferentes — e aí o protocolo inteiro
+  ("Vesper claude ") era colado no chat como se fosse fala.
+- **A trava de `RELAY_BLOCKED_AIS` mora DENTRO do lock da sessão**
+  (`DictationSession.handle_complete(..., blocked_ais=...)`), não num
+  `if` antes da chamada. Fora dele havia uma janela real: o relay
+  pulava a checagem quando um ditado já estava aberto
+  (`session.dictating`), mas entre ler isso e a mensagem ser tratada o
+  ditado do mic podia FECHAR — e aí ela abria justamente o alvo
+  proibido. Um gate só, no mesmo lugar que decide e abre, é também o
+  que impede duas lógicas paralelas de divergirem (o motivo de
+  `preview()` reusar `_decide()` desde sempre).
+- **Mensagem inteira sem nome de IA abre a `DEFAULT_AI`; pelo mic,
+  não** (`CommandRouter.split_complete()`, usado só por
+  `handle_complete()`). O Atalho e o rascunho Swift grudam "over" no
+  FIM de TODA mensagem, e é justamente isso que faz o caso "só a wake
+  word sozinha" — o único que abria a `DEFAULT_AI` — nunca acontecer
+  por lá: "vIsper que horas são over" não abria NADA, calado dos dois
+  lados. Ou seja, os dois caminhos de iPhone recomendados só
+  funcionavam se a pessoa lembrasse de começar dizendo o nome de uma
+  IA. A assimetria com o mic é deliberada e não pode cair junto: o mic
+  escuta SEM PARAR, então exigir um nome de IA logo depois da wake
+  word é o que impede uma palavra parecida no meio de conversa
+  ambiente ("véspera…") de abrir coisa sozinha. No relay não existe
+  conversa ambiente — cada mensagem custou um toque ou uma frase pra
+  Siri, e o tópico é secreto. A wake word continua obrigatória nos
+  dois.
+- **Reconectar no ntfy recupera o que chegou durante a queda**
+  (`RelayListener._subscribe_url()`, `config.RELAY_BACKLOG_MAX_SECONDS`).
+  O ntfy só entrega, por padrão, o que chega enquanto você está
+  conectado — mensagem publicada durante o backoff (que chega a 60s)
+  sumia PRA SEMPRE, e o telefone mostrava "Sent to your Mac" de
+  qualquer jeito. Perda assim é indistinguível de "o Mac ignorou o que
+  eu falei" — é exatamente o formato do relato "quase nada funcionou".
+  Três guardas, nenhuma opcional: a PRIMEIRA conexão nunca pede
+  histórico (abrir o app não pode executar o que foi dito antes dele
+  existir); sem uma âncora (`_last_message_id`) também não pede, senão
+  o `since` viraria duração e errar pra mais reexecuta comando velho;
+  e queda mais longa que o teto é considerada perdida de propósito.
+  Dedupe por id porque o ntfy pode reentregar a própria âncora, e
+  reexecutar (abrir app, colar, apertar Enter) é irreversível.
+- **Código de idioma é validado ANTES de salvar**
+  (`config.SUPPORTED_LANGUAGE_CODES`, checado no menu "Spoken
+  languages…" e em `user_settings.VALIDATORS`). O validador antigo só
+  olhava a FORMA (2-8 caracteres), então "pt-BR" e "eng" passavam,
+  eram salvos, e o app dizia "Languages saved… It already applies" —
+  e só então quebrava, porque o Whisper levanta exceção em código
+  desconhecido lá DENTRO do laço de transcrição, o que derruba a
+  thread de escuta inteira. O app ficava mudo minutos depois do
+  ajuste, sem nada ligando as duas coisas. E o erro é fácil de
+  cometer justamente aqui: "português", "pt-BR", "eng" são todos
+  palpites razoáveis de quem fala português — no MENU que existe
+  especificamente pra consertar "só funciona em inglês".
+- **O app gera o tópico do ntfy sozinho** (menu "iPhone connection…" →
+  digitar `new`). Sem isso, TODO caminho documentado pra conseguir um
+  tópico passava pelo `setup_visper.py` — que é exatamente o que quem
+  instalou pelo `.dmg` não tem. A única saída sobrando era inventar um
+  à mão, e um tópico inventado por humano é justamente o que não pode
+  acontecer, porque ele É a senha do canal. Mostra na tela E copia pro
+  clipboard: são 30+ caracteres aleatórios que precisam ser digitados
+  no telefone, e copiar da tela à mão é onde mora o erro de digitação.
 - **Configuração pessoal mora FORA do repositório**
   (`user_settings.py` → `~/Library/Application Support/vIsper/settings.json`).
   O repo é PÚBLICO e o `NTFY_TOPIC` é, na prática, a senha que impede
@@ -451,7 +557,10 @@ hardware.
 
 Módulos principais (mic local, sempre ativos):
 - `config.py` — wake word, IA padrão, apelidos de cada IA, palavras
-  de fechamento (`CLOSE_TRIGGERS`), dispositivos de entrada preferidos
+  de fechamento (`CLOSE_TRIGGERS`), códigos de idioma aceitos
+  (`SUPPORTED_LANGUAGE_CODES`, só pra validar o que se digita no menu),
+  janela de recuperação do relay (`RELAY_BACKLOG_MAX_SECONDS`),
+  dispositivos de entrada preferidos
   (`PREFERRED_INPUT_DEVICES` — DJI Mic, Sony XM5), tópico do ntfy,
   chaves do Porcupine. É o arquivo que se edita pra ajustar
   comportamento sem mexer no resto.
@@ -550,7 +659,9 @@ Módulos principais (mic local, sempre ativos):
   tratar o retorno como string. A escolha da IA é por POSIÇÃO do
   apelido na fala (mais cedo ganha), com desempate por comprimento —
   ver o raciocínio e o bug que motivou cada metade em "Decisões de
-  arquitetura". 24 testes dedicados.
+  arquitetura". `open()`/`split()`/`split_complete()`/`preview_complete()`
+  existem pro relay do iPhone — ver as decisões de arquitetura sobre a
+  IA resolvida e sobre a `DEFAULT_AI`. 29 testes dedicados.
 - `dictation.py` — a máquina de estados ocioso/ditando. Fecha com a
   wake word OU qualquer `CLOSE_TRIGGERS`. A mensagem final é o BUFFER
   INTERNO (populado por chamadas anteriores de `.handle()`) **mais**
@@ -575,7 +686,8 @@ Módulos principais (mic local, sempre ativos):
   opcionais (callbacks sem argumento, só feedback — não afetam a
   máquina de estados; `on_send` NÃO dispara quando o fechamento não
   tinha nada pra mandar), usados por `main.py` pra tocar o earcon.
-  **`handle_complete()`** é a segunda entrada pública, pro relay do
+  **`handle_complete(transcript, ai_id=None)`** é a segunda entrada
+  pública, pro relay do
   iPhone (ver `relay_listener.py` e a decisão de arquitetura
   correspondente): ao contrário de `handle()`, o conteúdo só tem um
   gatilho removido se ele estiver GRUDADO NO FIM
@@ -596,7 +708,7 @@ Módulos principais (mic local, sempre ativos):
   BLOQUEANTE de verdade (`router.route()` → `subprocess.run()` abrindo
   o app) entre ler e escrever — janela larga o bastante pra um comando
   quase simultâneo pelo mic e pelo iPhone abrir DUAS IAs e perder o
-  conteúdo de uma das duas. 42 testes dedicados (inclui um teste de 20
+  conteúdo de uma das duas. 62 testes dedicados (inclui um teste de 20
   threads concorrentes contra a mesma sessão, provando que o lock
   serializa sem perder/corromper conteúdo — não reproduz o timing
   exato da corrida original, isso exigiria hardware real, mas prova
@@ -649,7 +761,11 @@ Módulos principais (mic local, sempre ativos):
   repositório nem o script na máquina, e mandar essa pessoa editar o
   `config.py` é exatamente o atrito que o `.dmg` existe pra tirar.
   Idioma vale NA HORA (`_apply_languages()`, chamado tanto pelo
-  `__init__` quanto pelo menu — as três derivadas mudam juntas); wake
+  `__init__` quanto pelo menu — as três derivadas mudam juntas) e é
+  VALIDADO antes de salvar (ver a decisão sobre
+  `config.SUPPORTED_LANGUAGE_CODES`); "iPhone connection…" gera um
+  tópico sozinho se você digitar `new`, o que é o que torna o iPhone
+  utilizável pra quem instalou pelo `.dmg`; wake
   word exige reabrir, porque `dictation.py`/`command_router.py` leem
   `WAKE_WORD` uma vez na importação. **"Recent activity…"** mostra as
   últimas 25 linhas de "ouvi X / decidi Y" (`_log_activity()`,
@@ -678,7 +794,7 @@ Módulos principais (mic local, sempre ativos):
   timer relê `_current_state` na hora de voltar em vez de capturar o
   estado de antes: entre o flash e o disparo dá tempo de parar a
   escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
-  desfeito por um timer velho. 86 testes
+  desfeito por um timer velho. 95 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -707,7 +823,19 @@ Módulos de entrada alternativa (compartilham o mesmo
   `session.handle_complete()`, não `session.handle()` — ver a decisão
   de arquitetura sobre isso (mensagens do relay já chegam INTEIRAS,
   então não faz sentido vasculhar o meio do texto atrás de gatilho de
-  fechamento). `on_message` opcional dispara com o texto BRUTO de
+  fechamento). Lê o cabeçalho opcional `#visper-ai=<id>` da primeira
+  linha (`_split_ai_header()`) pra saber a IA JÁ RESOLVIDA pelo app que
+  mandou, e passa ela adiante em `handle_complete(..., ai_id=...)` —
+  ver a decisão de arquitetura sobre isso; cabeçalho ausente, com IA
+  inventada, ou de uma versão futura cai no caminho de texto livre de
+  sempre, nunca descarta a mensagem. A trava de `RELAY_BLOCKED_AIS`
+  olha o alvo DECLARADO (`preview_complete()`), que é o mesmo que seria
+  aberto de verdade — usar `preview()` aqui deixaria o caminho novo da
+  `DEFAULT_AI` passar sem checagem nenhuma. `_subscribe_url()`
+  reconecta com `since=` pra recuperar o que chegou durante a queda
+  (ver a decisão correspondente pras três guardas que impedem isso de
+  virar "reexecuta comando de horas atrás").
+  `on_message` opcional dispara com o texto BRUTO de
   TODA mensagem recebida, ANTES de qualquer trava ou tentativa de
   casar gatilho — plugado em `main._log_relay_received()`, existe
   porque sem isso uma mensagem que não bate com NADA (ex.: wake word
@@ -778,7 +906,7 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   não dependa de re-adivinhar por texto livre o que o botão já sabia
   com certeza — mudança de contrato maior, não feita nesta leva
   (ver "Limitações conhecidas").
-- `test_pwa.js` — 39 testes do PWA num Chromium DE VERDADE
+- `test_pwa.js` — 48 testes do PWA num Chromium DE VERDADE
   (Playwright), rodando no CI. **A peça mais validada do projeto** — a
   única testada em runtime real em vez de mocks. Achou dois defeitos
   visuais que nenhuma leitura de código teria pego: o `hidden` não
@@ -797,7 +925,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 350 testes no total. Rodar com:
+- `test_*.py` — 398 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -904,21 +1032,31 @@ Design (`design/`):
   barra de menu + app do iPhone), com a paleta de status completa (7
   cores, ver acima) e texto de produto em inglês. Tem prefers-
   reduced-motion respeitado.
-- `DESIGN.md` — notas de paleta/estilo. **Desatualizado**: ainda não
-  reflete a paleta de status expandida (só documentação, não afeta
-  funcionamento).
+- `DESIGN.md` — notas de paleta/estilo. Já reflete a paleta de status
+  expandida e a separação marca × estado, e documenta os dois defeitos
+  visuais que só apareceram nas capturas reais do app (o `hidden` que
+  não esconde SVG, e o `viewBox` do mascote). Inclui capturas REAIS do
+  `docs/index.html` num Chromium com viewport de iPhone 13 — não
+  mockup.
 
 Nenhum dos conceitos de design foi reagido pela Valeta ainda — pode
 mudar bastante antes de virar assets de produção.
 
 ## Limitações conhecidas
 
-1. Sem UI de configuração — tudo se ajusta editando `config.py`
-   direto.
+1. ~~Sem UI de configuração — tudo se ajusta editando `config.py`
+   direto.~~ **DESATUALIZADO**: wake word, idiomas, tópico do iPhone e
+   microfone se ajustam pelo MENU do app (ver `main.py`), sem Terminal
+   e sem o repositório. O que continua só em `config.py` é o resto
+   (gatilhos de fechamento, apelidos de IA, dispositivos preferidos,
+   limiares).
 2. Tópico do ntfy é hardcoded no rascunho do Swift
    (`TROQUE_AQUI_PELO_MESMO_TOPICO_DO_MAC`) — precisa de um jeito
    melhor (tela de config no app, ou Keychain) antes de distribuir de
-   verdade.
+   verdade. Vale só pro rascunho Swift: o PWA guarda em
+   `localStorage`, o Atalho guarda dentro do próprio atalho, e o lado
+   do Mac gera o tópico sozinho pelo menu ("iPhone connection…" →
+   `new`).
 3. `_listen_loop_porcupine` em `main.py` nunca rodou numa máquina
    real — é a parte menos validada do projeto inteiro.
 4. `audio_file_input.py` existe mas não está plugado em `main.py`.
@@ -999,9 +1137,15 @@ mudar bastante antes de virar assets de produção.
    não casar com nenhum gatilho. Conhecido, não corrigido — a correção
    (janela deslizante) muda o contrato de todo mundo que consome
    `chunks()`.
-13. **Escolher o chip "Claude" no app de iPhone e ditar/digitar
+13. ~~**Escolher o chip "Claude" no app de iPhone e ditar/digitar
    conteúdo que começa com "code"/"código" faz a mensagem ser
-   BLOQUEADA em vez de aberta.** Achado numa auditoria de bugs depois
+   BLOQUEADA em vez de aberta.**~~ **CORRIGIDO** — ver a decisão de
+   arquitetura "A IA escolhida no iPhone viaja RESOLVIDA". O texto
+   abaixo fica como histórico do que era, porque explica por que a
+   correção tomou a forma que tomou. Um detalhe importante que só
+   apareceu ao reproduzir: o gatilho era mais LARGO que o documentado
+   aqui — o casamento é fuzzy, então "coding is hard" também batia com
+   "code" e também era descartado. Achado numa auditoria de bugs depois
    que a Valeta relatou "quase nada funcionou" no telefone. Causa:
    `config.AI_TRIGGERS` tem `"claude": ["claude"]` e
    `"claude_code": ["claude code", "claude código"]` — quando o texto
@@ -1029,10 +1173,14 @@ mudar bastante antes de virar assets de produção.
    por um motivo real do lado da voz. Afeta só a combinação específica
    "chip Claude" + conteúdo começando em "code"/"código"; as outras
    três IAs não têm gatilho colidente nenhum.
-14. **O rascunho Swift (`ios/SendToVisperIntent.swift`) e a receita do
+14. ~~**O rascunho Swift (`ios/SendToVisperIntent.swift`) e a receita do
    app Atalhos (`ios/ATALHO_IPHONE.md`) só abrem alguma coisa se o que
-   for falado/ditado COMEÇAR com o nome de uma IA configurada** —
-   documentado e corrigido nesta sessão (o Swift agora gruda a wake
+   for falado/ditado COMEÇAR com o nome de uma IA configurada**~~
+   **CORRIGIDO** — `CommandRouter.split_complete()` faz mensagem
+   INTEIRA sem nome de IA abrir a `DEFAULT_AI`, igual a "vIsper"
+   sozinha no mic. O mic continua exigindo o nome (ver a decisão de
+   arquitetura correspondente pro porquê da assimetria). Histórico do
+   que era: documentado e parcialmente corrigido numa sessão anterior (o Swift agora gruda a wake
    word e "over" em `perform()`; o Atalho já grudava, mas faltava
    avisar). Causa: os dois sempre grudam um "over" fixo no FIM da
    mensagem, então o roteador nunca vê "só a wake word sozinha" (que é
@@ -1055,7 +1203,7 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
   Então: a lista `PACKAGES`, o `user_settings` no bundle, e a cópia do
   libportaudio estão corretos. O que continua não validado é o
   comportamento COM microfone e COM permissões concedidas.
-- **O app de iPhone funciona num navegador real** (39 testes,
+- **O app de iPhone funciona num navegador real** (48 testes,
   `test_pwa.js`, no CI a cada push).
 - **O link publicado (`mpvaleta.github.io/vIsper/`) está atualizado
   com o código mais recente** — confirmado nesta sessão via a API do

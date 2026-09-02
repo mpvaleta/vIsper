@@ -37,6 +37,95 @@ class CommandRouter:
         self.ai_actions[ai_name]()
         return ai_name, leftover
 
+    def open(self, ai_name: str):
+        """
+        ABRE uma IA já resolvida, sem adivinhar nada por texto.
+
+        Existe pro relay do iPhone (ver relay_listener.py): lá a pessoa
+        TOCOU num botão, então a IA já é uma certeza — não faz sentido
+        re-descobrir por texto livre o que o toque já sabia. Fazer isso
+        era um bug real: o app mandava "vIsper claude <conteúdo> over"
+        numa string só, e conteúdo que começasse com "code"/"código"
+        (ou qualquer coisa parecida o bastante — o casamento é fuzzy,
+        então "coding is hard" também batia) fazia o roteador preferir
+        corretamente o gatilho de DUAS palavras "claude code" ao de uma
+        só "claude". Como claude_code está em config.RELAY_BLOCKED_AIS
+        por segurança, a mensagem inteira era recusada e sumia — com o
+        telefone mostrando "Sent to your Mac" do mesmo jeito, porque o
+        POST pro ntfy tinha dado 200.
+
+        A regra de desempate do _decide() NÃO é o problema e não pode
+        ser mexida: ela existe pro caso de VOZ equivalente ("vIsper
+        claude code também abre um terminal" tem que abrir o Claude
+        Code). O problema era jogar fora uma certeza e pedir pro
+        roteador de voz adivinhar de novo.
+
+        Retorna o nome da IA aberta, ou None se `ai_name` não for uma
+        IA conhecida (nome inventado chegando pelo relay não pode
+        virar KeyError e derrubar a thread de escuta).
+        """
+        if ai_name not in self.ai_actions:
+            return None
+        self.ai_actions[ai_name]()
+        return ai_name
+
+    def split(self, transcript: str):
+        """
+        O que route() DECIDIRIA, sem abrir nada: (nome_da_ia, leftover)
+        ou None.
+
+        Mesma decisão de route()/preview(), exposta inteira porque
+        dictation.handle_complete() precisa das DUAS metades quando uma
+        mensagem do iPhone chega no meio de um ditado já aberto: ali o
+        texto é CONTEÚDO, então a wake word e o nome da IA que vêm
+        grudados nele (o app monta "<wake> <ia> <texto> over" numa
+        string só) têm que ser removidos antes de ir pro buffer — senão
+        são colados no chat literalmente, como se a pessoa tivesse
+        ditado "vIsper claude" no meio da frase.
+        """
+        return self._decide(transcript)
+
+    def split_complete(self, transcript: str):
+        """
+        Como split(), mas pra mensagens que chegam INTEIRAS e
+        deliberadas (o relay do iPhone): wake word + conteúdo sem
+        nenhum nome de IA reconhecível abre a DEFAULT_AI, em vez de
+        devolver None.
+
+        Por que a diferença existe: _decide() devolve None nesse caso
+        de propósito, e isso é uma proteção do MICROFONE — ele escuta
+        sem parar, então uma palavra parecida com a wake word no meio
+        de conversa ambiente ("véspera…") não pode abrir nada sozinha,
+        e exigir um nome de IA logo depois é o que segura isso. No
+        relay não existe conversa ambiente: cada mensagem custou um
+        toque ou uma frase pra Siri, e o tópico do ntfy é secreto.
+
+        Bug real que isso corrige (CLAUDE.md, limitação 14): o Atalho e
+        o rascunho Swift grudam um "over" no FIM de toda mensagem, e é
+        justamente esse "over" que faz "só a wake word sozinha" nunca
+        acontecer — então "vIsper que horas são over" não abria NADA, e
+        sem erro nenhum dos dois lados. Na prática, os dois caminhos de
+        iPhone recomendados só funcionavam se a pessoa lembrasse de
+        começar dizendo o nome de uma IA.
+        """
+        decidido = self._decide(transcript)
+        if decidido is not None:
+            return decidido
+
+        wake = find_trigger_span(transcript, WAKE_WORD, FUZZY_MATCH_THRESHOLD)
+        if wake is None:
+            return None
+        return DEFAULT_AI, trim_for_content(transcript[wake[1]:])
+
+    def preview_complete(self, transcript: str):
+        """Qual IA split_complete() abriria — sem abrir nada.
+
+        A trava do relay (RELAY_BLOCKED_AIS) TEM que enxergar o mesmo
+        alvo que vai ser aberto de verdade; usar preview() aqui deixaria
+        o caminho da DEFAULT_AI passar sem checagem nenhuma."""
+        decidido = self.split_complete(transcript)
+        return decidido[0] if decidido else None
+
     def preview(self, transcript: str):
         """
         Qual IA este texto ABRIRIA — sem abrir nada.

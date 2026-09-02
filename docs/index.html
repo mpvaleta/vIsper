@@ -571,6 +571,15 @@
   var recording = false;
   var countdownTimer = null;
   var idleTimer = null;
+  // True entre o recog.start() e o primeiro evento que ele produzir.
+  // Existe so pra fechar a corrida de toque duplo (ver startDictation).
+  var starting = false;
+  // Vigia o caso em que start() nao lanca excecao mas NENHUM evento
+  // chega — falha conhecida do Web Speech no iOS, principalmente com o
+  // app rodando a partir da tela de inicio. Sem isto o botao ficava
+  // preso em "comecando" pra sempre e nao dava pra tentar de novo.
+  var startWatchdog = null;
+  var START_TIMEOUT_MS = 2500;
   // Quanto tempo sem digitar/ditar antes de considerar "ela terminou".
   // 2.5s + os 3s da contagem = 5.5s de silencio total antes de sair —
   // folgado o bastante pra pausa de quem esta compondo a frase, curto
@@ -714,7 +723,14 @@
   }
 
   function startDictation() {
-    if (recording) { stopDictation(); return; }
+    // `recording` so vira true no onstart, que e ASSINCRONO — dois
+    // toques rapidos caiam os dois nesta funcao antes disso e criavam
+    // um SEGUNDO reconhecimento. O primeiro virava orfao: continuava
+    // ouvindo e escrevendo no campo pela propria closure (com o proprio
+    // `base` capturado), enquanto `recog` ja apontava pro segundo —
+    // entao stopDictation() so parava um deles e o texto saia
+    // duplicado. `starting` fecha essa janela.
+    if (recording || starting) { stopDictation(); return; }
     var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Rec) return;
 
@@ -728,7 +744,14 @@
     var base = $("text").value;
     if (base && !/\s$/.test(base)) base += " ";
 
+    // Qualquer erro desta sessao de reconhecimento. onend dispara
+    // SEMPRE, inclusive depois de onerror — sem lembrar que houve erro,
+    // o onend abaixo tratava a falha como "terminou normalmente".
+    var erro = null;
+
     recog.onstart = function () {
+      clearStartWatchdog();
+      starting = false;
       recording = true;
       $("btn-mic").setAttribute("data-recording", "true");
       $("btn-mic").setAttribute("aria-label", "Stop dictation");
@@ -744,6 +767,9 @@
     };
 
     recog.onerror = function (ev) {
+      clearStartWatchdog();
+      starting = false;
+      erro = ev.error || "unknown";
       recording = false;
       $("btn-mic").setAttribute("data-recording", "false");
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
@@ -758,9 +784,22 @@
     };
 
     recog.onend = function () {
+      clearStartWatchdog();
+      starting = false;
       recording = false;
       $("btn-mic").setAttribute("data-recording", "false");
       $("btn-mic").setAttribute("aria-label", "Start dictation");
+
+      // Terminou por ERRO: nao comeca a contagem de envio. O que
+      // estivesse no campo era resto de uma tentativa anterior ou uma
+      // captura parcial, e mandar isso sozinho e irreversivel — alem
+      // de apagar da tela o aviso que o onerror acabou de por ("No
+      // mic" virava "Ready" no mesmo instante, contradizendo o toast).
+      // Rearma so a ociosidade: se ela mesma tinha digitado algo, a
+      // janela normal de 2,5s + 3s ainda manda sozinho, com tempo de
+      // cancelar.
+      if (erro) { armIdleAutoSend(); return; }
+
       if ($("text").value.trim()) {
         if (s.autosend) startCountdown();
         else setStatus("idle", "Ready");
@@ -769,8 +808,40 @@
       }
     };
 
-    try { recog.start(); }
-    catch (e) { toast("Could not start dictation.", "error"); }
+    starting = true;
+    try {
+      recog.start();
+      armStartWatchdog();
+    } catch (e) {
+      starting = false;
+      toast("Could not start dictation.", "error");
+    }
+  }
+
+  // O Web Speech no iOS as vezes aceita o start() e nunca dispara nada
+  // — nem onstart, nem onerror, nem onend. Sem vigia, o app ficava
+  // travado achando que esta comecando, e o botao nao respondia mais.
+  // O caminho que sempre funciona (a tecla de microfone do TECLADO)
+  // continua disponivel, entao o aviso aponta pra ele.
+  function armStartWatchdog() {
+    clearStartWatchdog();
+    startWatchdog = setTimeout(function () {
+      startWatchdog = null;
+      if (!starting || recording) return;
+      starting = false;
+      try { if (recog) recog.abort(); } catch (e) {}
+      $("btn-mic").setAttribute("data-recording", "false");
+      $("btn-mic").setAttribute("aria-label", "Start dictation");
+      setStatus("idle", "Ready");
+      toast("Dictation did not start. Use the microphone key on your keyboard.",
+            "error");
+      armIdleAutoSend();
+    }, START_TIMEOUT_MS);
+  }
+
+  function clearStartWatchdog() {
+    clearTimeout(startWatchdog);
+    startWatchdog = null;
   }
 
   function stopDictation() {
@@ -860,10 +931,27 @@
 
   // ---------------- envio ----------------
   function buildMessage(texto) {
-    // Uma string so, no formato que dictation.py resolve numa chamada
-    // unica: wake word + nome da IA + conteudo + gatilho de fechamento.
-    // E exatamente o caminho "abre e fecha no MESMO trecho".
-    return s.wake + " " + s.ai + " " + texto + " over";
+    // Duas linhas. A primeira leva a IA JA RESOLVIDA — ela tocou no
+    // chip, entao nao ha nada pra adivinhar.
+    //
+    // Bug real que isso corrige: antes o id da IA ia so na prosa, e o
+    // Mac tinha que redescobrir por texto livre o que o toque ja sabia.
+    // Conteudo comecando com "code"/"codigo" (ou qualquer palavra
+    // parecida — o casamento la e fuzzy, "coding is hard" tambem
+    // batia) virava o gatilho de duas palavras "claude code", que o
+    // relay BLOQUEIA por seguranca. A mensagem sumia inteira e este
+    // app mostrava "Sent to your Mac" do mesmo jeito, porque o POST
+    // pro ntfy tinha dado 200.
+    //
+    // A segunda linha continua sendo a mensagem COMPLETA de sempre
+    // ("<wake> <ia> <texto> over"), de proposito: um Mac ainda nao
+    // atualizado ignora a primeira linha (ela vem ANTES da wake word,
+    // entao o roteador de la nem olha pra ela) e continua funcionando
+    // exatamente como antes. Este app se atualiza sozinho pelo GitHub
+    // Pages, o app do Mac so quando ela reinstala — entao "telefone
+    // novo + Mac velho" e o estado provavel, e nao pode quebrar.
+    return "#visper-ai=" + s.ai + "\n" +
+           s.wake + " " + s.ai + " " + texto + " over";
   }
 
   function send() {

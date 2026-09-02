@@ -9,6 +9,7 @@ ditado).
 
 import unittest
 
+import config
 from command_router import CommandRouter
 from dictation import DictationSession
 
@@ -573,3 +574,251 @@ class HandleCompleteTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RelayAiIdTest(unittest.TestCase):
+    """A IA vem RESOLVIDA pelo canal (o chip do app de iPhone), em vez
+    de ser re-adivinhada por texto livre.
+
+    Bug real que motivou tudo isto (CLAUDE.md, limitação 13): o app
+    mandava "vIsper claude <texto> over" numa string só, então
+    conteúdo começando com "code"/"código" — ou qualquer palavra
+    parecida, já que o casamento é fuzzy — fazia o roteador preferir o
+    gatilho de DUAS palavras "claude code" ao de uma só "claude". Como
+    claude_code está em RELAY_BLOCKED_AIS por segurança, a mensagem
+    inteira era recusada e sumia, com o telefone mostrando "Sent to
+    your Mac" do mesmo jeito.
+    """
+
+    def _build(self):
+        self.abertos = []
+        self.colados = []
+        self.enters = []
+        ai_actions = {
+            nome: (lambda n=nome: self.abertos.append(n))
+            for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+        }
+        return DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: self.enters.append(1),
+        )
+
+    def test_conteudo_comecando_com_code_nao_vira_claude_code(self):
+        session = self._build()
+        session.handle_complete(
+            "vIsper claude code review this function over", ai_id="claude"
+        )
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["code review this function"])
+
+    def test_conteudo_comecando_com_codigo_em_portugues(self):
+        session = self._build()
+        session.handle_complete(
+            "vIsper claude código revisa essa função over", ai_id="claude"
+        )
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["código revisa essa função"])
+
+    def test_palavra_apenas_parecida_com_code_tambem_sobrevive(self):
+        """O casamento do roteador é fuzzy, então "coding" batia com
+        "code" — o problema era mais largo do que a documentação dizia."""
+        session = self._build()
+        session.handle_complete("vIsper claude coding is hard over", ai_id="claude")
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["coding is hard"])
+
+    def test_ia_declarada_desconhecida_nao_abre_nada(self):
+        session = self._build()
+        resultado = session.handle_complete("vIsper oi over", ai_id="nao_existe")
+        self.assertIsNone(resultado)
+        self.assertEqual(self.abertos, [])
+        self.assertFalse(session.dictating)
+
+    def test_sem_ai_id_o_caminho_antigo_continua_valendo(self):
+        session = self._build()
+        session.handle_complete("vIsper perplexity quem ganhou ontem over")
+        self.assertEqual(self.abertos, ["perplexity"])
+        self.assertEqual(self.colados, ["quem ganhou ontem"])
+
+    def test_over_de_verdade_no_meio_continua_preservado(self):
+        session = self._build()
+        session.handle_complete(
+            "vIsper claude let's talk this over over", ai_id="claude"
+        )
+        self.assertEqual(self.colados, ["let's talk this over"])
+
+    def test_mensagem_sem_wake_word_tambem_funciona_com_ai_id(self):
+        """Com a IA declarada, a wake word deixa de ser necessária —
+        ela só continua na mensagem pra um Mac antigo entender."""
+        session = self._build()
+        session.handle_complete("qual é a previsão do tempo over", ai_id="claude")
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["qual é a previsão do tempo"])
+
+    def test_mensagem_do_iphone_no_meio_de_ditado_do_mic_nao_cola_protocolo(self):
+        """Com um ditado do mic já aberto, a mensagem do telefone é
+        CONTEÚDO — mas ela chega com wake word e nome da IA grudados
+        na frente por construção. Sem removê-los, "vIsper claude" era
+        colado no chat literalmente, no meio da frase ditada."""
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("primeira frase do mic")
+        session.handle_complete(
+            "vIsper claude e isso aqui do telefone over", ai_id="claude"
+        )
+        self.assertEqual(
+            self.colados, ["primeira frase do mic e isso aqui do telefone"]
+        )
+
+    def test_mesmo_caso_sem_ai_id_tambem_limpa_o_protocolo(self):
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("frase do mic")
+        session.handle_complete("vIsper chatgpt texto do telefone over")
+        self.assertEqual(self.colados, ["frase do mic texto do telefone"])
+
+
+class RelaySemNomeDeIaTest(unittest.TestCase):
+    """Mensagem inteira do iPhone sem nenhum nome de IA abre a
+    DEFAULT_AI, em vez de não fazer nada em silêncio.
+
+    Ver CLAUDE.md (limitação 14) e CommandRouter.split_complete(): o
+    Atalho e o rascunho Swift grudam "over" no fim de TODA mensagem,
+    então o caso "só a wake word sozinha" — o único que abria a
+    DEFAULT_AI — nunca acontecia por lá. Na prática os dois caminhos
+    de iPhone recomendados só funcionavam se a pessoa lembrasse de
+    começar dizendo o nome de uma IA, e falhavam CALADOS quando não.
+    """
+
+    def _build(self):
+        self.abertos = []
+        self.colados = []
+        ai_actions = {
+            nome: (lambda n=nome: self.abertos.append(n))
+            for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+        }
+        return DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: None,
+        )
+
+    def test_wake_word_mais_conteudo_abre_a_ia_padrao(self):
+        session = self._build()
+        session.handle_complete("vIsper que horas são em Tóquio over")
+        self.assertEqual(self.abertos, [config.DEFAULT_AI])
+        self.assertEqual(self.colados, ["que horas são em Tóquio"])
+
+    def test_nome_de_ia_explicito_continua_ganhando_da_padrao(self):
+        session = self._build()
+        session.handle_complete("vIsper perplexity quem ganhou ontem over")
+        self.assertEqual(self.abertos, ["perplexity"])
+
+    def test_sem_wake_word_continua_sem_abrir_nada(self):
+        """A wake word segue sendo obrigatória — o que caiu foi só a
+        exigência de nomear uma IA depois dela."""
+        session = self._build()
+        self.assertIsNone(session.handle_complete("que horas são em Tóquio over"))
+        self.assertEqual(self.abertos, [])
+
+    def test_o_mic_continua_exigindo_o_nome_da_ia(self):
+        """A proteção contra conversa ambiente é do MICROFONE, e não
+        pode cair junto: ele escuta sem parar, então "wake word + o que
+        vier" abrir uma IA sozinha seria falso positivo constante."""
+        session = self._build()
+        self.assertIsNone(session.handle("vIsper que horas são em Tóquio"))
+        self.assertEqual(self.abertos, [])
+        self.assertFalse(session.dictating)
+
+
+class ResumoDoEnvioTest(unittest.TestCase):
+    """A linha que vai pro "Recent activity" não pode parecer um envio
+    pela metade — que é um bug que já aconteceu de verdade aqui."""
+
+    def _build(self):
+        self.colados = []
+        return DictationSession(
+            router=CommandRouter({"claude": lambda: None}),
+            paste_action=self.colados.append,
+            send_action=lambda: None,
+        )
+
+    def test_texto_comprido_e_marcado_como_cortado(self):
+        session = self._build()
+        longo = "palavra " * 40
+        session.handle_complete("vIsper claude " + longo + "over", ai_id="claude")
+        resultado = session.handle_complete("vIsper claude " + longo + "over",
+                                            ai_id="claude")
+        self.assertTrue(resultado.endswith("…"))
+        # e o que foi COLADO continua inteiro
+        self.assertEqual(self.colados[-1], longo.strip())
+
+    def test_texto_curto_nao_ganha_reticencias(self):
+        session = self._build()
+        resultado = session.handle_complete("vIsper claude oi over", ai_id="claude")
+        self.assertTrue(resultado.endswith("sent: oi"))
+
+
+class ConteudoDoRelaySoTiraOPrefixoTest(unittest.TestCase):
+    """Só o PROTOCOLO do começo sai; nada é procurado no meio.
+
+    Duas falhas reais que isto fecha, as duas do tipo mais grave deste
+    projeto (texto colado E Enter apertado antes de alguém perceber):
+    procurar o nome da IA em qualquer lugar apagava palavras do meio da
+    frase, e exigir a wake word EXATA fazia o protocolo inteiro ser
+    colado quando o telefone estava com uma wake word desatualizada.
+    """
+
+    def _build(self):
+        self.abertos = []
+        self.colados = []
+        ai_actions = {
+            nome: (lambda n=nome: self.abertos.append(n))
+            for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+        }
+        return DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: None,
+        )
+
+    def test_nome_de_ia_no_meio_do_conteudo_nao_e_apagado(self):
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("primeira parte")
+        session.handle_complete(
+            "vIsper me lembra de perguntar pro gemini sobre isso over"
+        )
+        self.assertEqual(
+            self.colados,
+            ["primeira parte me lembra de perguntar pro gemini sobre isso"],
+        )
+
+    def test_nome_de_ia_no_meio_tambem_sobrevive_ao_abrir(self):
+        session = self._build()
+        session.handle_complete("vIsper claude pergunta pro gemini sobre isso over")
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["pergunta pro gemini sobre isso"])
+
+    def test_wake_word_desatualizada_no_telefone_nao_vaza_pro_chat(self):
+        # O telefone guarda a wake word dele; trocar no Mac pelo menu
+        # sem atualizar o link deixa os dois diferentes.
+        session = self._build()
+        session.handle_complete(
+            "Vesper claude qual é a previsão over", ai_id="claude"
+        )
+        self.assertEqual(self.colados, ["qual é a previsão"])
+
+    def test_wake_word_desatualizada_tambem_sem_cabecalho(self):
+        session = self._build()
+        session.handle_complete("Vesper claude qual é a previsão over")
+        self.assertEqual(self.abertos, ["claude"])
+        self.assertEqual(self.colados, ["qual é a previsão"])
+
+    def test_wake_word_no_meio_da_frase_e_conteudo_nao_protocolo(self):
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("olha")
+        session.handle_complete("explica o que é o vIsper pra mim over")
+        self.assertEqual(self.colados, ["olha explica o que é o vIsper pra mim"])

@@ -250,3 +250,46 @@ class DeteccaoToleranteTest(unittest.TestCase):
                 resultado = self.router.route(texto)
                 obtido = resultado[0] if resultado else None
                 self.assertEqual(previsto, obtido)
+
+
+class OpenESplitTest(unittest.TestCase):
+    """Abrir uma IA JÁ RESOLVIDA (sem adivinhar por texto) e inspecionar
+    a decisão sem efeito colateral. Ver CommandRouter.open()/split()."""
+
+    def setUp(self):
+        self.abertos = []
+        self.router = CommandRouter(
+            {
+                nome: (lambda n=nome: self.abertos.append(n))
+                for nome in ["claude", "claude_code", "chatgpt", "perplexity", "gemini"]
+            }
+        )
+
+    def test_open_abre_a_ia_pedida(self):
+        self.assertEqual(self.router.open("perplexity"), "perplexity")
+        self.assertEqual(self.abertos, ["perplexity"])
+
+    def test_open_com_nome_desconhecido_nao_levanta_nem_abre(self):
+        """Nome inventado chegando pelo relay não pode virar KeyError e
+        derrubar a thread de escuta."""
+        self.assertIsNone(self.router.open("nao_existe"))
+        self.assertEqual(self.abertos, [])
+
+    def test_split_decide_sem_abrir_nada(self):
+        self.assertEqual(
+            self.router.split("vIsper claude qual é a previsão"),
+            ("claude", "qual é a previsão"),
+        )
+        self.assertEqual(self.abertos, [])
+
+    def test_split_devolve_none_quando_nao_ha_nada_pra_abrir(self):
+        self.assertIsNone(self.router.split("conversa qualquer sem comando"))
+        self.assertEqual(self.abertos, [])
+
+    def test_split_e_route_concordam(self):
+        """Se divergirem, a trava do relay libera justamente o que
+        deveria barrar — é o motivo de preview()/split() reusarem
+        _decide() em vez de terem lógica própria."""
+        texto = "vIsper claude code também abre um terminal"
+        self.assertEqual(self.router.split(texto)[0], self.router.preview(texto))
+        self.assertEqual(self.router.route(texto)[0], self.router.preview(texto))
