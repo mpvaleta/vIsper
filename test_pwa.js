@@ -412,6 +412,113 @@ const servidor = http.createServer((req, res) => {
     await c.close();
   }
 
+  // (e) Contagem disparada duas vezes nao pode deixar um setInterval
+  // orfao: cancelar limpava so o id mais novo, e o velho mandava a
+  // mensagem assim mesmo — DEPOIS de a pessoa tocar em "Tap to
+  // cancel". O onend do Web Speech do iOS repete de verdade.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.type('#text', 'mensagem de teste');
+    await pg.waitForTimeout(2800);                 // ociosidade -> contagem 1
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(50);
+    await pg.evaluate(() => { const r = window.__recs[0]; r.onend(); r.onend(); });
+    await pg.waitForTimeout(100);
+    await pg.click('#btn-send');                   // cancela de proposito
+    await pg.waitForTimeout(5000);
+    check('cancelar vale mesmo com a contagem disparada duas vezes',
+      c.enviados.length === 0, `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (f) Microfone BLOQUEADO nao pode virar envio automatico 2,5s depois.
+  // Rearmar a ociosidade aqui anulava o proprio motivo da ramificacao de
+  // erro existir: virava um atraso, nao uma recusa.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.fill('#text', 'resto de uma tentativa anterior');
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(100);
+    await pg.evaluate(() => {
+      const r = window.__recs[0];
+      r.onerror({ error: 'not-allowed' }); r.onend();
+    });
+    await pg.waitForTimeout(6500);           // muito depois de 2,5s + 3s
+    check('microfone bloqueado nao manda o texto sozinho',
+      c.enviados.length === 0, `${c.enviados.length}`);
+    check('e o aviso de microfone bloqueado continua de pe',
+      (await pg.locator('#status').getAttribute('data-state')) === 'offline',
+      await pg.locator('#status').getAttribute('data-state'));
+    // ...mas digitar volta a armar: ninguem fica presa.
+    await pg.type('#text', ' agora eu digitei');
+    await pg.waitForTimeout(6500);
+    check('digitar depois do bloqueio rearma o envio',
+      c.enviados.length === 1, `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (g) Com "Keep text after sending" ligado, o campo guarda a mensagem
+  // JA mandada. Um toque num microfone que trava nao pode reenviar ela.
+  {
+    const c = await navegador.newContext(devices['iPhone 13']);
+    const pg = await novaPagina(c);
+    await pg.addInitScript(FAKE_SPEECH);
+    await pg.addInitScript((t) => {
+      localStorage.setItem('visper.settings.v1', JSON.stringify(
+        { topic: t, wake: 'vIsper', ai: 'claude', autosend: true, keep: true }));
+    }, TOPICO);
+    await pg.goto(base);
+    await pg.waitForTimeout(250);
+    await pg.fill('#text', 'mensagem que ja foi mandada');
+    await pg.click('#btn-send');
+    await pg.waitForTimeout(400);
+    check('mandou uma vez, na mao', c.enviados.length === 1, `${c.enviados.length}`);
+    await pg.click('#btn-mic');              // microfone que nunca responde
+    await pg.waitForTimeout(7000);           // vigia + ociosidade + contagem
+    check('o vigia nao reenvia a mensagem que ja tinha sido mandada',
+      c.enviados.length === 1, `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (h) Evento atrasado de um reconhecimento ABANDONADO pelo vigia nao
+  // pode derrubar as guardas do proximo — era exatamente o que
+  // `starting` foi criado pra impedir.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(3200);           // vigia abandona R1
+    await pg.click('#btn-mic');              // R2
+    await pg.waitForTimeout(100);
+    await pg.evaluate(() => { const r1 = window.__recs[0]; r1.onstart(); r1.onend(); });
+    await pg.waitForTimeout(100);
+    const recs = await pg.evaluate(() => window.__recs.length);
+    check('R1 atrasado nao criou nem matou reconhecimento', recs === 2, `${recs}`);
+    await pg.click('#btn-mic');              // guarda de toque duplo ainda de pe
+    await pg.waitForTimeout(100);
+    const depois = await pg.evaluate(() => window.__recs.length);
+    check('a guarda de toque duplo sobrevive ao evento atrasado',
+      depois === 2, `${depois}`);
+    await c.close();
+  }
+
+  // (i) Pedir pra parar ANTES de o reconhecimento ficar de pe: o
+  // microfone nao pode abrir depois disso.
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.click('#btn-mic');              // comeca
+    await pg.waitForTimeout(50);
+    await pg.click('#btn-mic');              // pede pra parar (ainda subindo)
+    await pg.waitForTimeout(50);
+    await pg.evaluate(() => window.__recs[0].onstart());   // sobe depois
+    await pg.waitForTimeout(100);
+    check('parar antes de subir mantem o microfone fechado',
+      (await pg.locator('#btn-mic').getAttribute('data-recording')) === 'false',
+      await pg.locator('#btn-mic').getAttribute('data-recording'));
+    check('e o reconhecimento e abortado',
+      await pg.evaluate(() => window.__recs[0].aborted === true));
+    await c.close();
+  }
+
   await navegador.close();
   servidor.close();
 

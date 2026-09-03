@@ -574,6 +574,11 @@
   // True entre o recog.start() e o primeiro evento que ele produzir.
   // Existe so pra fechar a corrida de toque duplo (ver startDictation).
   var starting = false;
+  // A pessoa pediu pra parar antes de o reconhecimento ficar de pe.
+  // Sem registrar isso, o stop() ia embora sem produzir evento nenhum
+  // (o estado travado do iOS que o vigia existe pra cobrir) e o
+  // microfone abria DEPOIS do pedido de parar.
+  var pendingStop = false;
   // Vigia o caso em que start() nao lanca excecao mas NENHUM evento
   // chega — falha conhecida do Web Speech no iOS, principalmente com o
   // app rodando a partir da tela de inicio. Sem isto o botao ficava
@@ -730,13 +735,21 @@
     // `base` capturado), enquanto `recog` ja apontava pro segundo —
     // entao stopDictation() so parava um deles e o texto saia
     // duplicado. `starting` fecha essa janela.
-    if (recording || starting) { stopDictation(); return; }
+    if (recording || starting) { pendingStop = true; stopDictation(); return; }
     var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Rec) return;
 
     cancelCountdown();
     cancelIdleAutoSend();
+    pendingStop = false;
     recog = new Rec();
+    // Identidade desta sessao. Os handlers sao closures, mas mexem em
+    // estado de MODULO (starting/recording/startWatchdog) — e nada os
+    // desliga do objeto antigo. Sem esta checagem, um evento atrasado
+    // de um reconhecimento ja abandonado pelo vigia derrubava as
+    // protecoes do reconhecimento SEGUINTE: matava o vigia dele e
+    // zerava `starting`, que e exatamente a guarda de toque duplo.
+    var sessao = recog;
     recog.lang = navigator.language || "en-US";
     recog.interimResults = true;
     recog.continuous = false;
@@ -748,10 +761,22 @@
     // SEMPRE, inclusive depois de onerror — sem lembrar que houve erro,
     // o onend abaixo tratava a falha como "terminou normalmente".
     var erro = null;
+    var permissaoNegada = false;
 
     recog.onstart = function () {
+      if (sessao !== recog) return;
       clearStartWatchdog();
       starting = false;
+      if (pendingStop) {
+        // Ela tocou pra parar enquanto isto ainda estava subindo.
+        pendingStop = false;
+        try { sessao.abort(); } catch (e) {}
+        recording = false;
+        $("btn-mic").setAttribute("data-recording", "false");
+        $("btn-mic").setAttribute("aria-label", "Start dictation");
+        setStatus("idle", "Ready");
+        return;
+      }
       recording = true;
       $("btn-mic").setAttribute("data-recording", "true");
       $("btn-mic").setAttribute("aria-label", "Stop dictation");
@@ -759,6 +784,7 @@
     };
 
     recog.onresult = function (ev) {
+      if (sessao !== recog) return;
       var txt = "";
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         txt += ev.results[i][0].transcript;
@@ -767,9 +793,12 @@
     };
 
     recog.onerror = function (ev) {
+      if (sessao !== recog) return;
       clearStartWatchdog();
       starting = false;
       erro = ev.error || "unknown";
+      permissaoNegada =
+        ev.error === "not-allowed" || ev.error === "service-not-allowed";
       recording = false;
       $("btn-mic").setAttribute("data-recording", "false");
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
@@ -784,6 +813,7 @@
     };
 
     recog.onend = function () {
+      if (sessao !== recog) return;
       clearStartWatchdog();
       starting = false;
       recording = false;
@@ -798,7 +828,18 @@
       // Rearma so a ociosidade: se ela mesma tinha digitado algo, a
       // janela normal de 2,5s + 3s ainda manda sozinho, com tempo de
       // cancelar.
-      if (erro) { armIdleAutoSend(); return; }
+      //
+      // MENOS quando o microfone foi BLOQUEADO. Ali rearmar anulava o
+      // proprio motivo desta ramificacao existir: o texto saia sozinho
+      // 2,5s depois, por cima do aviso "Microphone blocked" que acabou
+      // de aparecer — virava um atraso, nao uma recusa. E o que esta no
+      // campo nesse caso e resto de outra tentativa, nao uma frase que
+      // ela terminou. Digitar qualquer coisa rearma de novo, entao
+      // ninguem fica presa: e so o envio SEM acao nenhuma que para.
+      if (erro) {
+        if (!permissaoNegada) armIdleAutoSend();
+        return;
+      }
 
       if ($("text").value.trim()) {
         if (s.autosend) startCountdown();
@@ -835,7 +876,12 @@
       setStatus("idle", "Ready");
       toast("Dictation did not start. Use the microphone key on your keyboard.",
             "error");
-      armIdleAutoSend();
+      // NAO rearma o envio automatico. O que estiver no campo aqui nao
+      // veio desta tentativa (ela falhou) — e com "Keep text after
+      // sending" ligado e literalmente a mensagem ANTERIOR, ja mandada.
+      // Rearmar transformava um toque num microfone travado em um
+      // segundo envio identico, sem digitar nada: no Mac, outro colar e
+      // outro Enter da mesma frase.
     }, START_TIMEOUT_MS);
   }
 
@@ -853,6 +899,18 @@
   // 3s existe porque transcricao erra, e mandar coisa errada pro chat e
   // pior do que um toque a mais.
   function startCountdown() {
+    // Matar a contagem anterior ANTES de comecar outra. Sem isto, a
+    // segunda chamada sobrescrevia `countdownTimer` e o primeiro
+    // setInterval ficava orfao, rodando solto: cancelar depois limpava
+    // so o id mais novo, e o orfao mandava a mensagem assim mesmo —
+    // depois de a pessoa ter tocado em "Tap to cancel". Enviar apos um
+    // cancelamento explicito e o pior desfecho possivel aqui, e e
+    // irreversivel.
+    //
+    // Reproduzido com o onend disparando duas vezes, que e o que o
+    // Web Speech do iOS faz de verdade (e o que a corrida de toque
+    // duplo produzia antes de ser corrigida).
+    cancelCountdown();
     cancelIdleAutoSend();
     var SEGUNDOS = 3;
     var ring = document.querySelector(".ring");

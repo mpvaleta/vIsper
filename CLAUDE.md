@@ -327,6 +327,35 @@ não bug daqui).
   própria wake word, então trocá-la no Mac pelo menu sem atualizar o
   link deixava os dois diferentes — e aí o protocolo inteiro
   ("Vesper claude ") era colado no chat como se fosse fala.
+- **No app de iPhone, o caminho de ERRO do ditado é tão perigoso
+  quanto o de sucesso — porque ele também MANDA.** Quatro defeitos
+  reais achados por revisão adversarial do próprio diff, todos com o
+  mesmo desfecho (mensagem sai sem ninguém mandar, ou sai duas vezes),
+  e nenhum deles visível lendo só o caminho feliz:
+  (a) `startCountdown()` não matava uma contagem anterior, então duas
+  chamadas deixavam um `setInterval` ÓRFÃO — cancelar limpava só o id
+  mais novo e o velho mandava assim mesmo, DEPOIS de a pessoa tocar em
+  "Tap to cancel". Reproduzido com o `onend` disparando duas vezes, que
+  é o que o Web Speech do iOS faz de verdade (e o que a corrida de
+  toque duplo produzia antes de ser corrigida). Enviar depois de um
+  cancelamento explícito é o pior desfecho possível aqui.
+  (b) A ramificação "terminou com erro" recusava a contagem e então
+  rearmava a OCIOSIDADE, que começa a mesma contagem 2,5s depois —
+  virava um atraso, não uma recusa. Hoje só o bloqueio de microfone
+  (`not-allowed`/`service-not-allowed`) não rearma nada; digitar
+  qualquer coisa rearma de novo, então ninguém fica presa.
+  (c) O vigia do ditado travado rearmava a ociosidade, e com "Keep text
+  after sending" ligado o campo guarda a mensagem JÁ mandada — um
+  toque num microfone que trava virava um segundo envio idêntico, sem
+  digitar nada.
+  (d) Os handlers são closures mas mexem em estado de MÓDULO, e nada os
+  desliga do objeto antigo: um evento atrasado de um reconhecimento
+  abandonado pelo vigia matava o vigia do SEGUINTE e zerava `starting`
+  — justamente a guarda de toque duplo. Hoje cada handler confere a
+  identidade da própria sessão antes de mexer em qualquer coisa.
+  Junto veio `pendingStop`: pedir pra parar antes de o reconhecimento
+  ficar de pé não registrava nada, e o microfone abria depois do
+  pedido.
 - **A janela de recuperação do relay é um LIMITE, não um adiamento.**
   Duas correções que só apareceram revendo o próprio diff: (a) quando o
   teto RECUSA um replay por queda longa, a âncora
@@ -339,6 +368,16 @@ não bug daqui).
   cair deixa tudo depois da âncora igualmente antigo. A checagem de
   idade vale SÓ na recuperação, nunca ao vivo: relógio do Mac
   adiantado em relação ao do servidor descartaria mensagem boa.
+  A checagem de IDADE é a que faz o teto valer de verdade, e não é
+  redundante com o teto de tempo-fora: medir "há quanto tempo ESTE
+  PROCESSO se percebe fora" falha em dois cenários reais e comuns —
+  Mac que DORMIU (o processo estava congelado, então a queda percebida
+  é ~0 quando ele acorda) e captive portal devolvendo 200 (qualquer
+  200 zerava o relógio antes de qualquer linha ser lida). Nos dois, o
+  teto nunca engatava e o backlog inteiro entrava. Verificado de ponta
+  a ponta com relógio de verdade, HTTP de verdade e um servidor local
+  falando o protocolo do ntfy: mensagem de 12h não executa em nenhum
+  dos dois cenários, e a mensagem ao vivo continua chegando.
 - **A trava de `RELAY_BLOCKED_AIS` mora DENTRO do lock da sessão**
   (`DictationSession.handle_complete(..., blocked_ais=...)`), não num
   `if` antes da chamada. Fora dele havia uma janela real: o relay
@@ -930,7 +969,7 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   não dependa de re-adivinhar por texto livre o que o botão já sabia
   com certeza — mudança de contrato maior, não feita nesta leva
   (ver "Limitações conhecidas").
-- `test_pwa.js` — 48 testes do PWA num Chromium DE VERDADE
+- `test_pwa.js` — 58 testes do PWA num Chromium DE VERDADE
   (Playwright), rodando no CI. **A peça mais validada do projeto** — a
   única testada em runtime real em vez de mocks. Achou dois defeitos
   visuais que nenhuma leitura de código teria pego: o `hidden` não
@@ -1227,7 +1266,7 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
   Então: a lista `PACKAGES`, o `user_settings` no bundle, e a cópia do
   libportaudio estão corretos. O que continua não validado é o
   comportamento COM microfone e COM permissões concedidas.
-- **O app de iPhone funciona num navegador real** (48 testes,
+- **O app de iPhone funciona num navegador real** (58 testes,
   `test_pwa.js`, no CI a cada push).
 - **O link publicado (`mpvaleta.github.io/vIsper/`) está atualizado
   com o código mais recente** — confirmado nesta sessão via a API do
