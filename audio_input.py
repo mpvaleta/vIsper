@@ -126,7 +126,7 @@ def label_devices(devices):
         (
             index,
             name,
-            f"{name} (índice {index})" if name_counts[name] > 1 else name,
+            f"{name} (index {index})" if name_counts[name] > 1 else name,
         )
         for index, name in devices
     ]

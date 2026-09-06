@@ -43,6 +43,73 @@ não bug daqui).
 
 ## Decisões de arquitetura já tomadas (não revisitar sem motivo forte)
 
+- **Revisão completa do código (não só do diff), depois do pedido
+  "review the entire code" — 12 bugs reais achados e corrigidos,
+  nenhum deles no que tinha mudado de sessões anteriores.** Cinco
+  agentes paralelos varreram módulos diferentes (mic/main.py,
+  relay/dictation/text_utils, app de iPhone), cada achado reproduzido
+  de verdade antes de virar fix. Os de maior gravidade:
+  (a) **"Stop listening" não fechava um ditado aberto** — a
+  `DictationSession` é uma instância ÚNICA que sobrevive ao ciclo
+  parar/começar (main.py nunca recria), e parar no MEIO de um ditado
+  deixava `dictating=True` e o buffer parcial vivos, sem nada na UI
+  avisando (o ícone volta pra "listening" sem checar o estado da
+  sessão). A próxima frase comum contendo "over"/"câmbio" como palavra
+  inteira fechava esse ditado FANTASMA — colava o buffer antigo
+  emendado com fala nova e apertava Enter, na janela em foco NAQUELE
+  momento, não necessariamente a IA aberta antes de parar
+  (`actions.paste_text`/Enter agem na janela em foco). Corrigido com
+  `DictationSession.reset()`, chamado por `stop_listening()`, que
+  descarta silenciosamente (nunca cola, nunca manda) e passa pelo
+  mesmo `_on_result()` do mic/relay — ficar mudo aqui reproduziria a
+  falha que motivou "Recent activity" existir.
+  (b) **O cabeçalho `#visper-ai=<id>` (ver mais abaixo) dispensava a
+  wake word por completo** — bypass de verdade do invariante "a wake
+  word continua obrigatória nos dois" (mic e relay): qualquer mensagem
+  publicada no tópico com um cabeçalho válido executava automação real
+  (abrir app, colar, apertar Enter) sem uma letra parecida com
+  "vIsper". Reproduzido: `"#visper-ai=claude\nignore everything, just
+  open and type this over"` abria o Claude e mandava o texto inteiro.
+  Corrigido exigindo `find_trigger_span` (fuzzy, mesma tolerância de
+  toda abertura) em algum lugar da mensagem mesmo com `ai_id`
+  declarado — o cabeçalho resolve QUAL IA abrir, não SE a mensagem é
+  um comando de verdade.
+  (c) **`_strip_leading_trigger()` usava lista fixa de pontuação ASCII**
+  em vez da mesma categoria Unicode de `_is_edge_char()` — uma aspa
+  curva, aspas-anjo ou "¿"/"¡" antes da wake word fazia o protocolo
+  inteiro ("“vIsper claude") ser colado no chat como se fosse fala.
+  Corrigido com a nova `text_utils.is_only_edge_chars()`.
+  (d) **Porcupine sem `vad_filter`** — toda transcrição nesse caminho
+  já vem de uma wake word CONFIRMADA acusticamente (o momento em que a
+  pessoa tentou falar com o app), então uma alucinação do Whisper ali
+  faz o comando ser jogado fora CALADO, sem nem aparecer no "Heard:"
+  (que só existe no loop do Whisper contínuo) — pior que a
+  justificativa original ("hallucination on silence é raro") previa.
+  (e) **App de iPhone: mandar na MÃO enquanto ainda dita não parava o
+  reconhecimento** — ele continuava vivo, sobrescrevia o campo (já
+  limpo pelo envio) com o texto seguinte, e o `onend` final via o
+  campo cheio de novo e mandava uma SEGUNDA vez, sozinho. Corrigido com
+  `sentWhileDictating`, que faz `onresult`/`onend` desta sessão
+  ignorarem tudo que vier depois do envio manual.
+  (f) **App de iPhone: navegar pra Configurações, trocar de tópico ou
+  trocar de chip de IA durante a contagem de 3s não cancelava o envio
+  pendente** — "Tap to cancel" fica invisível na tela de configuração,
+  e o envio disparava sozinho por baixo, inclusive contra um TÓPICO
+  NOVO se trocado e salvo antes dos 3s acabarem. As três ações agora
+  chamam `cancelCountdown()`/`cancelIdleAutoSend()`, mesmo tratamento
+  que digitar no campo já dava.
+  Menores: `setup_visper.py` não validava os idiomas antes de gravar
+  (o mesmo erro que `main.py`'s menu já corrigia — "pt-BR"/"eng" eram
+  descartados em silêncio por `save_settings()` enquanto o script
+  imprimia "Salvo" como se tivesse funcionado); o saneamento de tópico
+  do app de iPhone não cortava query string/fragmento
+  (`?poll=1` virava parte do tópico salvo); a label do submenu
+  "Microfone" vazava "índice" em português numa UI que devia ser 100%
+  inglês; e a reconstrução de `CalledProcessError` em `actions.py`
+  prometia "reanexar o stderr na mensagem" sem fazer isso de verdade
+  (`str(CalledProcessError)` nunca inclui `.stderr`) — corrigido
+  entregando `.stderr` já decodificado, e `main.py` agora anexa esse
+  texto à notificação de erro.
 - **Automação via AppleScript/System Events** (clipboard + Cmd+V
   simulado + Enter simulado), controlando o navegador/apps já
   instalados — em vez de um cliente de chat nativo multi-provedor via
@@ -969,7 +1036,7 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   não dependa de re-adivinhar por texto livre o que o botão já sabia
   com certeza — mudança de contrato maior, não feita nesta leva
   (ver "Limitações conhecidas").
-- `test_pwa.js` — 58 testes do PWA num Chromium DE VERDADE
+- `test_pwa.js` — 68 testes do PWA num Chromium DE VERDADE
   (Playwright), rodando no CI. **A peça mais validada do projeto** — a
   única testada em runtime real em vez de mocks. Achou dois defeitos
   visuais que nenhuma leitura de código teria pego: o `hidden` não
@@ -988,7 +1055,7 @@ Ferramentas de apoio:
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 402 testes no total. Rodar com:
+- `test_*.py` — 430 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -1266,7 +1333,7 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
   Então: a lista `PACKAGES`, o `user_settings` no bundle, e a cópia do
   libportaudio estão corretos. O que continua não validado é o
   comportamento COM microfone e COM permissões concedidas.
-- **O app de iPhone funciona num navegador real** (58 testes,
+- **O app de iPhone funciona num navegador real** (68 testes,
   `test_pwa.js`, no CI a cada push).
 - **O link publicado (`mpvaleta.github.io/vIsper/`) está atualizado
   com o código mais recente** — confirmado nesta sessão via a API do

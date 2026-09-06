@@ -733,6 +733,20 @@ class VisperApp(rumps.App):
     def stop_listening(self, _):
         self.listening = False
         self._set_state("stopped")
+        # session.reset() descarta um ditado aberto que ficou pra trás
+        # — sem isto, ele sobrevivia CALADO até a próxima "Iniciar
+        # escuta" (self.session é uma instância única, criada uma vez
+        # no __init__, não recriada aqui). O ícone voltava pra
+        # "listening" sem checar `session.dictating`, então nada na UI
+        # avisava; a próxima frase comum que contivesse "over"/"câmbio"
+        # fechava aquele ditado fantasma — colando o buffer antigo
+        # emendado com fala nova e apertando Enter na janela que
+        # estivesse em foco naquele momento, não necessariamente a IA
+        # aberta antes de parar (actions.paste_text/Enter agem na
+        # janela em foco). Passa pelo mesmo _on_result() do mic/relay
+        # de propósito: ficar mudo aqui reproduziria a falha que
+        # motivou "Recent activity" existir.
+        self._on_result(self.session.reset())
 
     @rumps.clicked("Quit vIsper")
     def quit_app(self, _):
@@ -1103,7 +1117,20 @@ class VisperApp(rumps.App):
         except Exception as exc:
             self.listening = False
             self._set_state("error")
-            notify("vIsper", "Listening stopped", f"Audio error: {exc}")
+            # str(CalledProcessError) NUNCA inclui `.stderr` — é a
+            # própria implementação de __str__ do Python, não um
+            # detalhe de como esta exceção foi levantada (ver o
+            # comentário completo em actions._run()). Sem anexar
+            # `.stderr` à mão aqui, um osascript com erro de verdade
+            # (não recusa de permissão, que já tem seu próprio caminho)
+            # mostrava só "exit status 1" — mandando investigar o
+            # microfone quando o problema real (ex.: um erro de sintaxe
+            # no AppleScript) estava certinho ali, só não exibido.
+            detalhe = getattr(exc, "stderr", None)
+            mensagem = f"Audio error: {exc}"
+            if detalhe:
+                mensagem += f"\n{detalhe}"
+            notify("vIsper", "Listening stopped", mensagem)
 
     def _listen_loop(self):
         if self.porcupine_detector and self.porcupine_detector.enabled:

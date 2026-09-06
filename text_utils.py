@@ -345,6 +345,28 @@ def find_trigger_span(haystack: str, trigger: str, threshold: float = 1.0):
     return None
 
 
+def is_only_edge_chars(text: str) -> bool:
+    """
+    True se `text` for vazio ou tiver SÓ espaço/pontuação — nada que
+    conte como conteúdo de verdade.
+
+    Existe pra checar "só tem lixo ANTES de um gatilho encontrado no
+    meio de um texto maior" (ver dictation._strip_leading_trigger())
+    usando a MESMA regra Unicode de _is_edge_char(), em vez de uma
+    lista fixa de caracteres ASCII feita à mão. Achado por revisão
+    adversarial: a primeira versão de `_strip_leading_trigger()` usava
+    `text[:i].strip(" \\t\\n.,;:!?-—…\\"'")`, uma lista que não cobre
+    aspas curvas de abertura (“), aspas-anjo (« »), nem "¿"/"¡" — o
+    mesmo tipo de gap que `_is_edge_char()` foi criado pra fechar em
+    `split_after_word()`. Com uma dessas pontuações logo antes da wake
+    word (ex.: uma mensagem começando com “vIsper claude ...), a
+    checagem antiga não reconhecia a wake word como estando "no
+    começo", e o protocolo inteiro ("vIsper claude") era colado no chat
+    como se fosse fala de verdade.
+    """
+    return _strip_edges(text) == ""
+
+
 def trim_for_decision(text: str) -> str:
     """
     Prepara um resto de texto pra DECISÃO (nunca exibido): dobra e

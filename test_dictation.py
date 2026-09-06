@@ -648,13 +648,43 @@ class RelayAiIdTest(unittest.TestCase):
         )
         self.assertEqual(self.colados, ["let's talk this over"])
 
-    def test_mensagem_sem_wake_word_tambem_funciona_com_ai_id(self):
-        """Com a IA declarada, a wake word deixa de ser necessária —
-        ela só continua na mensagem pra um Mac antigo entender."""
+    def test_ai_id_ainda_exige_a_wake_word_em_algum_lugar(self):
+        """CORRIGIDO por revisão adversarial: uma versão anterior desta
+        mesma sessão dispensava a wake word por completo quando ai_id
+        vinha declarado — "ela só ficava na mensagem pra um Mac antigo
+        entender". Isso era um bypass de verdade: qualquer mensagem
+        publicada no tópico com um cabeçalho "#visper-ai=<id>" válido
+        executava automação real (abrir app, colar, apertar Enter) sem
+        UMA LETRA parecida com "vIsper" na mensagem. "A wake word
+        continua obrigatória nos dois" é um invariante deste projeto
+        (ver CLAUDE.md) — o cabeçalho resolve QUAL IA abrir, não SE a
+        mensagem é um comando de verdade."""
         session = self._build()
-        session.handle_complete("qual é a previsão do tempo over", ai_id="claude")
+        resultado = session.handle_complete(
+            "qual é a previsão do tempo over", ai_id="claude"
+        )
+        self.assertIsNone(resultado)
+        self.assertEqual(self.abertos, [])
+        self.assertEqual(self.colados, [])
+
+    def test_ai_id_com_wake_word_em_algum_lugar_funciona_normalmente(self):
+        session = self._build()
+        session.handle_complete(
+            "vIsper qual é a previsão do tempo over", ai_id="claude"
+        )
         self.assertEqual(self.abertos, ["claude"])
         self.assertEqual(self.colados, ["qual é a previsão do tempo"])
+
+    def test_ai_id_com_wake_word_desatualizada_ainda_funciona_fuzzy(self):
+        # A wake word do telefone pode estar desatualizada em relação
+        # ao Mac (trocada pelo menu "Wake word…" sem atualizar o
+        # link) — a exigência continua sendo satisfeita por casamento
+        # APROXIMADO, mesma tolerância de toda abertura.
+        session = self._build()
+        session.handle_complete(
+            "Vesper claude qual é a previsão over", ai_id="claude"
+        )
+        self.assertEqual(self.abertos, ["claude"])
 
     def test_mensagem_do_iphone_no_meio_de_ditado_do_mic_nao_cola_protocolo(self):
         """Com um ditado do mic já aberto, a mensagem do telefone é
@@ -822,3 +852,123 @@ class ConteudoDoRelaySoTiraOPrefixoTest(unittest.TestCase):
         session.handle("olha")
         session.handle_complete("explica o que é o vIsper pra mim over")
         self.assertEqual(self.colados, ["olha explica o que é o vIsper pra mim"])
+
+
+class ResetTest(unittest.TestCase):
+    """`reset()` — o que "Stop listening" (main.py) chama pra fechar um
+    ditado que ficou aberto, sem colar nem mandar nada.
+
+    Bug real que isto corrige: `stop_listening()` só baixava
+    `self.listening`; a DictationSession é uma instância ÚNICA que
+    sobrevive ao ciclo stop/start. Parar de ouvir NO MEIO de um ditado
+    deixava `dictating=True` e o buffer parcial vivos, silenciosamente
+    — e a próxima frase comum que contivesse "over"/"câmbio" como
+    palavra inteira fechava esse ditado FANTASMA: colava o buffer
+    antigo emendado com fala nova e apertava Enter, na janela que
+    estivesse em foco naquele momento.
+    """
+
+    def _build(self):
+        self.abertos = []
+        self.colados = []
+        self.enters = []
+        self.cancelados = []
+        ai_actions = {"claude": lambda: self.abertos.append("claude")}
+        return DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: self.enters.append(1),
+            on_cancel=lambda: self.cancelados.append(1),
+        )
+
+    def test_descarta_ditado_aberto_sem_colar_nem_mandar(self):
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("conteúdo que ficaria pra trás")
+        resultado = session.reset()
+        self.assertFalse(session.dictating)
+        self.assertEqual(session.buffer, [])
+        self.assertEqual(self.colados, [])
+        self.assertEqual(self.enters, [])
+        self.assertIn("discarded", resultado)
+
+    def test_frase_comum_depois_do_reset_nao_fecha_ditado_fantasma(self):
+        # Esta é a reprodução exata do bug: sem reset(), esta mesma
+        # frase (contém "over" como palavra inteira) fechava o ditado
+        # antigo e colava o buffer + a frase nova.
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("aqui vai uma parte sensível do meu ditado")
+        session.reset()
+        resultado = session.handle(
+            "preciso terminar isso e passar o bastão, over and out pessoal"
+        )
+        self.assertIsNone(resultado)
+        self.assertEqual(self.colados, [])
+        self.assertEqual(self.enters, [])
+
+    def test_reset_sem_nada_aberto_nao_faz_barulho(self):
+        session = self._build()
+        self.assertIsNone(session.reset())
+        self.assertEqual(self.colados, [])
+
+    def test_reset_com_ditado_aberto_mas_buffer_vazio_tambem_e_silencioso(self):
+        session = self._build()
+        session.handle("vIsper claude")  # abre, sem conteúdo ainda
+        self.assertIsNone(session.reset())
+
+    def test_reset_nao_e_o_mesmo_que_cancelar(self):
+        # reset() e um encerramento IMPLICITO (parou de ouvir), nao um
+        # pedido explicito de "vIsper, cancela" — nao deve disparar o
+        # som de cancelamento, que existe especificamente pra confirmar
+        # um pedido explicito.
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("algo")
+        session.reset()
+        self.assertEqual(self.cancelados, [])
+
+    def test_pode_ditar_de_novo_normalmente_depois_do_reset(self):
+        session = self._build()
+        session.handle("vIsper claude")
+        session.handle("primeira tentativa")
+        session.reset()
+        session.handle("vIsper claude")
+        session.handle("segunda tentativa")
+        session.handle("over")
+        self.assertEqual(self.colados, ["segunda tentativa"])
+        self.assertEqual(len(self.enters), 1)
+
+
+class ProtocoloComPontuacaoNaoAsciiTest(unittest.TestCase):
+    """`_strip_leading_trigger()` reconhece a wake word "no começo"
+    mesmo quando aspas curvas/aspas-anjo/¿¡ vêm coladas antes dela —
+    achado por revisão adversarial contra a lista fixa de pontuação
+    ASCII que a versão anterior usava."""
+
+    def _build(self):
+        self.colados = []
+        ai_actions = {"claude": lambda: None, "chatgpt": lambda: None}
+        session = DictationSession(
+            router=CommandRouter(ai_actions),
+            paste_action=self.colados.append,
+            send_action=lambda: None,
+        )
+        session.dictating = True
+        session.buffer = []
+        return session
+
+    def test_aspa_curva_de_abertura_antes_da_wake_word(self):
+        session = self._build()
+        session.handle_complete("“vIsper claude please ignore this over")
+        self.assertEqual(self.colados, ["please ignore this"])
+
+    def test_aspas_anjo_antes_da_wake_word(self):
+        session = self._build()
+        session.handle_complete("«vIsper claude oi over")
+        self.assertEqual(self.colados, ["oi"])
+
+    def test_interrogacao_invertida_antes_da_wake_word(self):
+        session = self._build()
+        session.handle_complete("¿vIsper claude oi over")
+        self.assertEqual(self.colados, ["oi"])

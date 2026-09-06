@@ -461,3 +461,33 @@ class TrimHelpersTest(unittest.TestCase):
         self.assertEqual(
             tu.trim_for_content(", qual é a previsão?"), "qual é a previsão?"
         )
+
+
+class IsOnlyEdgeCharsTest(unittest.TestCase):
+    """Achado por revisão adversarial: dictation._strip_leading_trigger()
+    usava uma lista fixa de pontuação ASCII pra checar "só tem lixo
+    antes do gatilho" — e essa lista não cobria aspas curvas, aspas-anjo
+    nem "¿"/"¡", que o Whisper (e um copiar-colar humano) produzem de
+    verdade. Uma dessas antes da wake word fazia o protocolo inteiro
+    ("“vIsper claude") ser colado no chat como se fosse fala real."""
+
+    def test_vazio_conta_como_so_borda(self):
+        self.assertTrue(tu.is_only_edge_chars(""))
+
+    def test_so_espaco_conta_como_so_borda(self):
+        self.assertTrue(tu.is_only_edge_chars("   \t\n  "))
+
+    def test_pontuacao_ascii_conta_como_so_borda(self):
+        self.assertTrue(tu.is_only_edge_chars(" - . , ; : ! ? "))
+
+    def test_aspas_curvas_e_aspas_anjo_contam_como_so_borda(self):
+        # Exatamente a lacuna achada: a lista ASCII antiga não cobria
+        # nenhum destes, todos produzidos de verdade pelo Whisper.
+        for pontuacao in ("“", "”", "«", "»", "¿", "¡", "—", "…"):
+            with self.subTest(pontuacao=pontuacao):
+                self.assertTrue(tu.is_only_edge_chars(pontuacao))
+
+    def test_qualquer_letra_ou_digito_nao_conta_como_so_borda(self):
+        self.assertFalse(tu.is_only_edge_chars("a"))
+        self.assertFalse(tu.is_only_edge_chars(" a "))
+        self.assertFalse(tu.is_only_edge_chars("9"))

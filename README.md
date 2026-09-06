@@ -491,8 +491,8 @@ Honestidade sobre o que foi validado de verdade:
 
 | Peça | Como foi validada |
 |---|---|
-| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 388 testes automatizados |
-| App de iPhone (`docs/`) | 58 testes num navegador de verdade (Chromium), a cada push. **O link publicado só atualiza em push pra `main`** — confira a aba Actions se o app parece desatualizado |
+| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 430 testes automatizados |
+| App de iPhone (`docs/`) | 68 testes num navegador de verdade (Chromium), a cada push. **O link publicado só atualiza em push pra `main`** — confira a aba Actions se o app parece desatualizado |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |
 | Microfone, permissões do macOS, barra de menu | Já rodou num Mac de verdade (ícone, escuta, permissões, download do modelo). Falta uma sessão inteira de ponta a ponta sem travar |

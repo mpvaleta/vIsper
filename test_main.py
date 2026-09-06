@@ -798,6 +798,63 @@ class IniciarEscutaTest(unittest.TestCase):
         self.assertIn("Bluetooth", titulo)
 
 
+class PararEscutaTest(unittest.TestCase):
+    """`stop_listening()` tem que descartar um ditado aberto, não só
+    baixar a flag — ver DictationSession.reset() pro raciocínio
+    completo. Sem isto, a sessão sobrevivia CALADA e a próxima frase
+    comum ("...over and out") fechava um ditado FANTASMA depois de
+    "Iniciar escuta" de novo."""
+
+    def setUp(self):
+        main.rumps.notification.reset_mock()
+
+    def _abrir_ditado_sem_acao_real(self, app, conteudo=None):
+        # Abre o ditado direto no estado da sessão, sem passar pelo
+        # roteador de verdade (que chamaria actions.open_claude() de
+        # propósito real — subprocess/osascript, inexistente aqui). O
+        # que este teste cobre é reset(), não o roteador.
+        app.session.dictating = True
+        app.session.buffer = [conteudo] if conteudo else []
+
+    def test_para_a_escuta_e_descarta_ditado_aberto(self):
+        app = _build_app()
+        self._abrir_ditado_sem_acao_real(app, "conteúdo que ficaria pra trás")
+
+        app.stop_listening(None)
+
+        self.assertFalse(app.listening)
+        self.assertFalse(app.session.dictating)
+        self.assertEqual(app.session.buffer, [])
+
+    def test_o_descarte_aparece_no_historico_e_na_notificacao(self):
+        app = _build_app()
+        self._abrir_ditado_sem_acao_real(app, "conteúdo real")
+        app.stop_listening(None)
+        self.assertTrue(main.rumps.notification.called)
+        texto = " ".join(str(a) for a in main.rumps.notification.call_args[0])
+        self.assertIn("discarded", texto)
+        self.assertTrue(any("discarded" in linha for linha in app._history))
+
+    def test_parar_sem_ditado_aberto_nao_notifica_nada(self):
+        app = _build_app()
+        app.stop_listening(None)
+        main.rumps.notification.assert_not_called()
+
+    def test_frase_comum_depois_de_reiniciar_a_escuta_nao_fecha_fantasma(self):
+        # A reproducao de ponta a ponta do bug: para, reinicia (a
+        # sessao e a MESMA instancia — main.py nunca recria), e uma
+        # frase que so por acaso contem "over" nao pode mandar nada.
+        app = _build_app()
+        self._abrir_ditado_sem_acao_real(app, "aqui vai uma parte sensível")
+        app.stop_listening(None)
+        # "Iniciar escuta" de novo (sem tocar em app.session)
+        app.listening = True
+        resultado = app.session.handle(
+            "preciso terminar isso e passar o bastão, over and out pessoal"
+        )
+        self.assertIsNone(resultado)
+
+
 class ErroDePermissaoTest(unittest.TestCase):
     def setUp(self):
         main.rumps.alert.reset_mock()
@@ -859,6 +916,30 @@ class ErroDePermissaoTest(unittest.TestCase):
         self.assertFalse(app.listening)
         self.assertEqual(app._current_state, "error")
         main.rumps.alert.assert_not_called()
+        self.assertIn("Audio error", main.rumps.notification.call_args[0][2])
+
+    def test_erro_de_osascript_mostra_o_stderr_de_verdade(self):
+        # str(CalledProcessError) nunca inclui .stderr — sem anexar à
+        # mão, a notificação mostrava só "exit status 1" mesmo quando
+        # o motivo real (ex.: erro de sintaxe no AppleScript) estava
+        # disponível, escondendo o diagnóstico que faria diferença.
+        app = _build_app(load_model=True)
+        app.listening = True
+        erro = main.subprocess.CalledProcessError(
+            1, ["osascript"], None, "1:1: execution error: something real"
+        )
+        with patch.object(app, "_listen_loop", side_effect=erro):
+            app._listen_loop_safe()
+        mensagem = main.rumps.notification.call_args[0][2]
+        self.assertIn("Audio error", mensagem)
+        self.assertIn("something real", mensagem)
+
+    def test_erro_sem_stderr_nao_quebra_a_notificacao(self):
+        app = _build_app(load_model=True)
+        app.listening = True
+        erro = main.subprocess.CalledProcessError(1, ["osascript"])
+        with patch.object(app, "_listen_loop", side_effect=erro):
+            app._listen_loop_safe()
         self.assertIn("Audio error", main.rumps.notification.call_args[0][2])
 
 

@@ -585,6 +585,11 @@
   // preso em "comecando" pra sempre e nao dava pra tentar de novo.
   var startWatchdog = null;
   var START_TIMEOUT_MS = 2500;
+  // Uma sessao de reconhecimento cujo conteudo ja foi mandado na mao
+  // (tocou "Send to Mac" enquanto ainda ditava). onresult/onend desta
+  // sessao passam a ignorar o que vier depois — ver o comentario em
+  // startDictation() pro bug real que isto fecha.
+  var sentWhileDictating = false;
   // Quanto tempo sem digitar/ditar antes de considerar "ela terminou".
   // 2.5s + os 3s da contagem = 5.5s de silencio total antes de sair —
   // folgado o bastante pra pausa de quem esta compondo a frase, curto
@@ -697,6 +702,14 @@
       b.setAttribute("aria-pressed", String(s.ai === ai.id));
       b.innerHTML = '<span class="swatch"></span>' + ai.label;
       b.addEventListener("click", function () {
+        // Mesma regra do campo de texto: mexer em QUALQUER coisa que
+        // mude o que vai ser mandado cancela um envio pendente. Sem
+        // isso, trocar de IA durante a contagem (pra corrigir o
+        // alvo, não pra mandar) deixava "Tap to cancel" na tela mas
+        // mandava do mesmo jeito, pra IA nova, sem confirmação
+        // nenhuma — a troca virava um envio disfarçado.
+        cancelCountdown();
+        cancelIdleAutoSend();
         s.ai = ai.id;
         save();
         buildAiGrid();
@@ -742,6 +755,7 @@
     cancelCountdown();
     cancelIdleAutoSend();
     pendingStop = false;
+    sentWhileDictating = false;
     recog = new Rec();
     // Identidade desta sessao. Os handlers sao closures, mas mexem em
     // estado de MODULO (starting/recording/startWatchdog) — e nada os
@@ -785,6 +799,13 @@
 
     recog.onresult = function (ev) {
       if (sessao !== recog) return;
+      // Ja mandou na mao enquanto isto ainda ditava (ver o handler de
+      // #btn-send): ignora qualquer resultado que chegue depois —
+      // inclusive o resultado FINAL que recog.stop() ainda produz —
+      // senao ele reescreve o campo (ja limpo pelo envio) por cima, e
+      // o onend logo depois acha o campo cheio de novo e comeca outra
+      // contagem sozinha, mandando de novo o que ja tinha ido.
+      if (sentWhileDictating) return;
       var txt = "";
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         txt += ev.results[i][0].transcript;
@@ -819,6 +840,11 @@
       recording = false;
       $("btn-mic").setAttribute("data-recording", "false");
       $("btn-mic").setAttribute("aria-label", "Start dictation");
+
+      // Ja foi mandado na mao enquanto ainda ditava — nao reabre
+      // contagem nenhuma em cima disso. Ver o comentario completo no
+      // handler de #btn-send.
+      if (sentWhileDictating) return;
 
       // Terminou por ERRO: nao comeca a contagem de envio. O que
       // estivesse no campo era resto de uma tentativa anterior ou uma
@@ -1046,6 +1072,16 @@
 
   // ---------------- configuracao ----------------
   function openSettings() {
+    // Sair da tela principal com uma contagem de envio rodando não
+    // pode deixar ela rodando por baixo: "Tap to cancel" (o único
+    // jeito de cancelar) fica invisível na tela de configuração, e o
+    // envio disparava sozinho 3s depois — inclusive contra um tópico
+    // NOVO, se a pessoa trocasse e salvasse antes daqueles 3s. Mesmo
+    // tratamento SILENCIOSO que digitar no campo já dá ao cancelar: o
+    // rascunho continua no campo, sem toast — voltar pra tela
+    // principal já mostra que nada foi mandado.
+    cancelCountdown();
+    cancelIdleAutoSend();
     $("in-topic").value = s.topic;
     $("in-wake").value = s.wake;
     $("in-autosend").checked = s.autosend;
@@ -1070,7 +1106,15 @@
     var t = $("in-topic").value.trim();
     // Tolera colar a URL inteira do ntfy em vez do topico solto — e o
     // erro mais provavel, e da pra corrigir sozinho.
-    t = t.replace(/^https?:\/\/ntfy\.sh\//i, "").replace(/\/+$/, "");
+    t = t.replace(/^https?:\/\/ntfy\.sh\//i, "");
+    // Corta query string e fragmento tambem — plausivel de sobrar se
+    // o topico foi copiado da barra de enderecos depois de abrir ele
+    // no proprio site do ntfy (ex.: "...topico?poll=1"). Sem isto, o
+    // topico salvo virava um DIFERENTE do de verdade (o servidor trata
+    // "topico" e "topico?poll=1" como topicos distintos), sem aviso
+    // nenhum — parecia ter conectado, mas nunca chegava nada no Mac.
+    t = t.split(/[?#]/)[0];
+    t = t.replace(/\/+$/, "");
 
     s.topic = t;
     s.wake = $("in-wake").value.trim() || defaults.wake;
@@ -1099,6 +1143,17 @@
     // de cancelar nao teria servido pra nada.
     if (cancelCountdown()) { cancelIdleAutoSend(); return; }
     cancelIdleAutoSend();
+    if (recording) {
+      // Mandar na MAO enquanto ainda dita: o reconhecimento continua
+      // vivo se nao for parado agora, e reproduzia sozinho um SEGUNDO
+      // envio depois — onresult sobrescrevia o campo (ja limpo por
+      // send()) com o texto continuando a chegar, e onend, ao
+      // terminar, achava o campo cheio de novo e comecava outra
+      // contagem. `sentWhileDictating` fecha as duas pontas: onresult
+      // e onend desta sessao passam a ignorar tudo que vier depois.
+      sentWhileDictating = true;
+      stopDictation();
+    }
     send();
   });
   // Mexer no texto durante a contagem cancela o envio: sinal claro de

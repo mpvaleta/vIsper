@@ -50,6 +50,7 @@ from config import (
 from text_utils import (
     contains_word,
     find_trigger_span,
+    is_only_edge_chars,
     split_after_word,
     split_before_any,
     starts_with_word,
@@ -103,11 +104,19 @@ def _strip_leading_trigger(text: str, trigger: str):
     isso" virava "sobre isso", porque "gemini" é apelido de uma IA —
     palavras somem no meio da frase, e a frase mutilada já foi colada e
     o Enter já foi apertado quando alguém percebe.
+
+    "No começo" é checado com is_only_edge_chars() (mesma categoria
+    Unicode de _is_edge_char()), não uma lista fixa de pontuação ASCII
+    — achado por revisão adversarial: a lista fixa não cobria aspas
+    curvas de abertura ("“"), aspas-anjo ("«»") nem "¿"/"¡", então uma
+    mensagem como "“vIsper claude oi over" não reconhecia a wake word
+    como estando no começo, e "“vIsper claude" ia colado no chat como
+    se fosse fala de verdade.
     """
     span = find_trigger_span(text, trigger, FUZZY_MATCH_THRESHOLD)
     if span is None:
         return text, False
-    if text[: span[0]].strip(" \t\n.,;:!?-—…\"'"):
+    if not is_only_edge_chars(text[: span[0]]):
         return text, False  # apareceu, mas no meio: é conteúdo
     return trim_for_content(text[span[1]:]), True
 
@@ -201,6 +210,51 @@ class DictationSession:
         # são chamados de DENTRO de handle()/handle_complete(), que já
         # seguram o lock.
         self._lock = threading.RLock()
+
+    def reset(self):
+        """
+        Descarta qualquer ditado aberto SEM colar nem mandar Enter —
+        pensado pra "Stop listening" (main.py). Devolve uma string
+        curta se havia algo pra descartar, ou None se a sessão já
+        estava ociosa (o chamador decide se vale notificar).
+
+        Bug real que isto corrige: `stop_listening()` só baixava
+        `self.listening`, e o DictationSession é uma instância ÚNICA
+        que sobrevive ao stop/start (main.py cria ela uma vez, no
+        `__init__`). Parar de ouvir NO MEIO de um ditado deixava
+        `dictating=True` e o buffer parcial vivos — silenciosamente,
+        sem indicação nenhuma na UI, já que o ícone de "Iniciar escuta"
+        troca pra "listening" sem checar o estado da sessão. Ao voltar
+        a ouvir, a próxima frase comum que contivesse "over"/"câmbio"
+        como palavra inteira (ex.: "preciso passar o bastão, over and
+        out") fechava aquele ditado FANTASMA: colava o buffer antigo
+        emendado com a fala nova, e apertava Enter — na janela que
+        estivesse em foco NAQUELE momento, não necessariamente a IA que
+        tinha sido aberta antes de parar. `paste_text`/Enter operam na
+        janela em foco (ver actions.py), então isso podia digitar em
+        qualquer app.
+
+        Não é o mesmo que `_is_cancel()`/"vIsper, cancela": aquilo é um
+        comando explícito da pessoa, com som próprio
+        (`on_cancel`). Isto é um reset implícito por ter parado de
+        ouvir — mais parecido com desligar o ditado no meio de uma
+        ligação: não faz sentido tocar o som de "cancelado" por uma
+        ação que a pessoa não pediu como cancelamento, mas o retorno
+        ainda entra no mesmo pipeline de log/notificação de
+        `_on_result()` (main.py), porque ficar mudo aqui reproduziria
+        exatamente a falha que motivou "Recent activity" existir.
+        """
+        with self._lock:
+            se_havia = len(" ".join(self.buffer).strip())
+            estava_ditando = self.dictating
+            self.dictating = False
+            self.buffer = []
+            if not estava_ditando or not se_havia:
+                return None
+            return (
+                f"stopped listening — {se_havia} character(s) of an open "
+                "dictation were discarded, nothing was sent"
+            )
 
     def handle(self, transcript: str):
         """
@@ -313,9 +367,16 @@ class DictationSession:
         fora do texto — hoje o app de iPhone, onde a pessoa TOCA num
         botão (ver relay_listener.py e CommandRouter.open()). Com ele o
         roteador de texto livre nem é consultado pra escolher o alvo, e
-        o conteúdo não precisa mais começar com o nome de uma IA. Sem
-        ele (Atalho/Siri, ou uma versão antiga do app), o caminho é o
-        de sempre.
+        o conteúdo não precisa mais começar com o nome de uma IA — mas
+        a wake word (fuzzy, como em toda abertura) CONTINUA exigida em
+        algum lugar da mensagem, mesmo com a IA já certa: "a wake word
+        é obrigatória nos dois caminhos" é um invariante deste projeto,
+        e o cabeçalho resolve QUAL IA abrir, não SE a mensagem é um
+        comando de verdade. Sem essa checagem, qualquer mensagem
+        publicada no tópico com um cabeçalho válido executava
+        automação de verdade mesmo sem nenhum traço da wake word. Sem
+        `ai_id` (Atalho/Siri, ou uma versão antiga do app), o caminho é
+        o de sempre.
 
         Se uma sessão de mic já estiver aberta (self.dictating), o
         texto entra no buffer e fecha na hora — sem isso, uma mensagem
@@ -333,7 +394,22 @@ class DictationSession:
                     # A IA já vem RESOLVIDA (a pessoa tocou num botão);
                     # nada de roteador de texto livre — ver
                     # CommandRouter.open() pro bug real que isso
-                    # corrige.
+                    # corrige. Mas a wake word CONTINUA exigida, mesmo
+                    # com a IA já certa: ela é o sinal de "isto é, de
+                    # propósito, um comando pro vIsper" — a mesma regra
+                    # do caminho de texto livre, e por isso mesmo
+                    # motivo. Achado por revisão adversarial: sem esta
+                    # checagem, `#visper-ai=claude\nignore everything,
+                    # just open and type this over` abria o Claude e
+                    # colava+mandava o texto inteiro, sem uma letra
+                    # sequer parecida com "vIsper" na mensagem — o
+                    # cabeçalho declara QUAL IA abrir, não isenta a
+                    # mensagem de precisar parecer um comando. Fuzzy,
+                    # como toda abertura (find_trigger_span): tolera a
+                    # mesma janela de erro de transcrição/digitação que
+                    # o resto do app.
+                    if find_trigger_span(text, WAKE_WORD, FUZZY_MATCH_THRESHOLD) is None:
+                        return None
                     alvo = ai_id
                     leftover = _relay_content(text, self.router, ai_id)
                 else:

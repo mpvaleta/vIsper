@@ -519,6 +519,126 @@ const servidor = http.createServer((req, res) => {
     await c.close();
   }
 
+  // (j) Mandar na MAO enquanto ainda dita: o reconhecimento nao pode
+  // continuar vivo e reenviar um segundo "envio" depois. Sem a guarda
+  // `sentWhileDictating`, um onresult tardio sobrescrevia o campo (ja
+  // limpo por send()) e o onend, ao terminar, achava o campo cheio de
+  // novo e comecava outra contagem sozinha.
+  console.log('\n11) Mandar na mao interrompe o ditado, sem reenviar depois');
+  {
+    const { c, pg } = await paginaComSpeechFalso();
+    await pg.click('#btn-mic');
+    await pg.waitForTimeout(50);
+    await pg.evaluate(() => window.__recs[0].onstart());
+    await pg.evaluate(() => {
+      window.__recs[0].onresult({
+        resultIndex: 0, results: [[{ transcript: 'primeira parte' }]]
+      });
+    });
+    check('campo reflete o ditado antes do envio manual',
+      (await pg.inputValue('#text')) === 'primeira parte',
+      await pg.inputValue('#text'));
+
+    await pg.click('#btn-send');   // manda na mao, ainda "ditando"
+    await pg.waitForTimeout(200);
+    check('mandou o que tinha na hora',
+      c.enviados.length === 1, `${c.enviados.length}`);
+    check('parou o reconhecimento (stop foi chamado)',
+      await pg.evaluate(() => window.__recs[0].stopped === true) ||
+      await pg.evaluate(() => !!window.__recs[0].onend) /* fake dispara onend no stop() */);
+
+    // Um resultado TARDIO do mesmo reconhecimento (o navegador de
+    // verdade ainda entrega um final depois do stop()) nao pode
+    // reaparecer no campo nem disparar outro envio.
+    await pg.evaluate(() => {
+      window.__recs[0].onresult({
+        resultIndex: 0,
+        results: [[{ transcript: 'primeira parte e mais um pedaco tardio' }]]
+      });
+    });
+    check('resultado tardio nao volta pro campo',
+      (await pg.inputValue('#text')) === '', await pg.inputValue('#text'));
+
+    await pg.waitForTimeout(3400);   // tempo de sobra pra ociosidade+contagem
+    check('nao mandou uma segunda vez', c.enviados.length === 1,
+      `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (k) Abrir a tela de configuracao com uma contagem rodando tem que
+  // cancelar o envio pendente — "Tap to cancel" fica invisivel la, e
+  // o botao continuava mandando por baixo.
+  console.log('\n12) Navegar/trocar de IA durante a contagem cancela o envio');
+  {
+    const c = await navegador.newContext(devices['iPhone 13']);
+    const pg = await novaPagina(c);
+    await pg.goto(`${base}#t=${TOPICO}`);
+    await pg.waitForTimeout(300);
+    await pg.type('#text', 'rascunho confidencial');
+    await pg.waitForTimeout(2800);   // ociosidade -> contagem rodando
+    check('contagem estava rodando antes de abrir configuracao',
+      await pg.locator('.ring').getAttribute('hidden') === null);
+    await pg.click('#btn-settings');
+    await pg.waitForTimeout(3400);   // tempo de sobra pra contagem antiga
+    check('abrir configuracao cancela o envio pendente',
+      c.enviados.length === 0, `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (l) Trocar de topico e salvar, com a contagem cancelada no passo
+  // anterior, nao pode mandar o rascunho antigo pro topico NOVO.
+  {
+    const c = await navegador.newContext(devices['iPhone 13']);
+    const pg = await novaPagina(c);
+    await pg.goto(`${base}#t=${TOPICO}`);
+    await pg.waitForTimeout(300);
+    await pg.type('#text', 'outro rascunho nao revisado');
+    await pg.waitForTimeout(2800);
+    await pg.click('#btn-settings');
+    await pg.fill('#in-topic', 'visper-OutroTopicoBem-Diferente');
+    await pg.click('#btn-save');
+    await pg.waitForTimeout(3400);
+    check('trocar de topico durante a contagem nao manda o rascunho antigo',
+      c.enviados.length === 0, `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (m) Trocar o chip de IA durante a contagem tambem cancela — trocar
+  // pra CORRIGIR o alvo nao podia continuar mandando pro alvo antigo.
+  {
+    const c = await navegador.newContext(devices['iPhone 13']);
+    const pg = await novaPagina(c);
+    await pg.goto(`${base}#t=${TOPICO}`);
+    await pg.waitForTimeout(300);
+    await pg.type('#text', 'pergunta para a ia errada');
+    await pg.waitForTimeout(2800);
+    await pg.locator('.ai-chip', { hasText: 'Perplexity' }).click();
+    await pg.waitForTimeout(3400);
+    check('trocar de IA durante a contagem cancela o envio',
+      c.enviados.length === 0, `${c.enviados.length}`);
+    await c.close();
+  }
+
+  // (n) O saneamento do topico tambem corta query string/fragmento —
+  // nao so o prefixo "https://ntfy.sh/". Um topico copiado da barra de
+  // enderecos do proprio ntfy.sh (ex.: depois de ver o topico na web)
+  // costuma vir com "?poll=1" ou similar grudado.
+  console.log('\n13) Saneamento do topico corta query string e fragmento');
+  {
+    const c = await navegador.newContext(devices['iPhone 13']);
+    const pg = await novaPagina(c);
+    await pg.goto(`${base}#t=${TOPICO}`);
+    await pg.waitForTimeout(300);
+    await pg.click('#btn-settings');
+    await pg.fill('#in-topic', 'https://ntfy.sh/visper-RealTopic999?poll=1');
+    await pg.click('#btn-save');
+    const salvo = await pg.evaluate(() =>
+      JSON.parse(localStorage.getItem('visper.settings.v1') || '{}').topic);
+    check('topico salvo sem query string', salvo === 'visper-RealTopic999',
+      salvo);
+    await c.close();
+  }
+
   await navegador.close();
   servidor.close();
 
