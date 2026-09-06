@@ -196,10 +196,15 @@ que muda é o que dispara a contagem:
 - **Tecla de microfone do teclado do iPhone** (ou digitando) — ele
   espera ~2,5 segundos parado antes de começar a contagem, num total
   de ~5,5 segundos. Esse é o caminho que sempre funciona, mesmo
-  quando o iOS não dá o reconhecimento de voz pro app. Continuar escrevendo cancela a
-contagem e recomeça a espera, então corrigir uma palavra não te
-obriga a apertar nada. Dá pra desligar tudo isso em **Settings** →
-*Auto-send when you stop*.
+  quando o iOS não dá o reconhecimento de voz pro app.
+
+Continuar escrevendo cancela a contagem e recomeça a espera, então
+corrigir uma palavra não te obriga a apertar nada. **Qualquer coisa
+que mude o que seria mandado também cancela**: trocar o chip de IA,
+abrir **Settings**, ou trocar de tópico. A ideia é que nada saia sem
+você ver — não dá pra tocar em "Tap to cancel" numa tela onde esse
+botão nem aparece. Dá pra desligar o automático de vez em
+**Settings** → *Auto-send when you stop*.
 
 > **Faça o passo 4 antes de fechar o Safari.** No iOS, o app da tela de
 > início tem armazenamento separado do Safari; o que leva sua conexão
@@ -491,7 +496,7 @@ Honestidade sobre o que foi validado de verdade:
 
 | Peça | Como foi validada |
 |---|---|
-| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 430 testes automatizados |
+| Lógica do núcleo (roteamento, ditado, texto, config, barra de menu) | 432 testes automatizados |
 | App de iPhone (`docs/`) | 68 testes num navegador de verdade (Chromium), a cada push. **O link publicado só atualiza em push pra `main`** — confira a aba Actions se o app parece desatualizado |
 | `.app` / `.dmg` | Compilado num macOS de verdade a cada push, com teste de que o app abre e não morre |
 | Segredos fora do repositório | Verificado no CI a cada push |

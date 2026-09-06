@@ -94,6 +94,32 @@ def check_settings_source():
     _ok(f"lido de {caminho}")
     _ok(f"sobrepondo: {', '.join(config.OVERRIDDEN_KEYS)}")
 
+    # Chaves que ESTÃO no arquivo mas NÃO entraram: descartadas uma a
+    # uma pelos VALIDATORS (é assim de propósito — um valor ruim não
+    # pode levar o arquivo inteiro junto). O problema é que esse
+    # descarte é silencioso: o app segue rodando com o PADRÃO, e a
+    # pessoa fica achando que configurou. O caso real disso é
+    # TRANSCRIPTION_LANGUAGES com "pt-BR"/"eng" — configurou pra falar
+    # português, o valor foi recusado, e o app continua "só em inglês",
+    # que é exatamente a queixa que esse ajuste existe pra resolver.
+    # A checagem acima só pega o caso em que NENHUMA chave entrou.
+    try:
+        import json
+
+        cru = json.loads(caminho.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cru = {}
+    if isinstance(cru, dict):
+        ignoradas = [k for k in cru if k not in config.OVERRIDDEN_KEYS]
+        if ignoradas:
+            _fail(
+                f"estas chaves estão em {caminho.name} mas foram RECUSADAS e "
+                f"não estão valendo: {', '.join(sorted(ignoradas))} — valor "
+                "fora do formato aceito (ver user_settings.VALIDATORS). O app "
+                "está usando o PADRÃO no lugar delas."
+            )
+            return 1
+
     modo = caminho.stat().st_mode & 0o777
     if modo & 0o077:
         _warn(

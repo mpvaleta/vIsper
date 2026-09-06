@@ -357,7 +357,12 @@ não bug daqui).
   Mac velho" é o estado PROVÁVEL numa atualização; (c) a trava de
   segurança passou a olhar o alvo DECLARADO
   (`preview_complete()`), que é exatamente o que vai ser aberto —
-  declarar `claude_code` continua sendo recusado, testado. Ao remover
+  declarar `claude_code` continua sendo recusado, testado. E (d), que
+  faltou na primeira versão e virou bug de verdade: **o cabeçalho NÃO
+  dispensa a wake word.** Ele resolve QUAL IA abrir, não SE aquilo é
+  um comando — sem essa exigência, qualquer mensagem publicada no
+  tópico com um cabeçalho válido executava automação real sem uma
+  letra parecida com "vIsper" (ver o primeiro item desta seção). Ao remover
   o nome da IA do conteúdo, só os apelidos da IA DECLARADA são
   considerados, nunca a lista inteira: é isso que desarma a colisão
   sem tocar no roteador. Medido, não suposto: o gatilho era mais largo
@@ -748,7 +753,7 @@ Módulos principais (mic local, sempre ativos):
     conteúdo que legitimamente contivesse "over"/"câmbio" antes do
     marcador. Casando só a partir do fim, "let's talk this over" +
     marcador vira "let's talk this over over" → remove só o ÚLTIMO,
-    preservando o "over" de verdade da frase. 66 testes.
+    preservando o "over" de verdade da frase. 71 testes.
 - `audio_input.py` — lista/detecta microfones (`guess_preferred_device()`,
   `classify_device()`, orientados por `config.PREFERRED_INPUT_DEVICES` —
   casamento por SUBSTRING simples, não palavra inteira, porque nome de
@@ -838,7 +843,13 @@ Módulos principais (mic local, sempre ativos):
   BLOQUEANTE de verdade (`router.route()` → `subprocess.run()` abrindo
   o app) entre ler e escrever — janela larga o bastante pra um comando
   quase simultâneo pelo mic e pelo iPhone abrir DUAS IAs e perder o
-  conteúdo de uma das duas. 62 testes dedicados (inclui um teste de 20
+  conteúdo de uma das duas. **`reset()`** é a terceira entrada
+  pública: descarta um ditado aberto SEM colar nem mandar, e existe pro
+  "Stop listening" do menu — a sessão é uma instância ÚNICA que
+  sobrevive ao ciclo parar/começar, então sem isso o buffer parcial
+  ficava vivo e calado até a próxima frase com "over"/"câmbio" fechar
+  esse ditado fantasma na janela errada (ver o primeiro item das
+  decisões de arquitetura). 73 testes dedicados (inclui um teste de 20
   threads concorrentes contra a mesma sessão, provando que o lock
   serializa sem perder/corromper conteúdo — não reproduz o timing
   exato da corrida original, isso exigiria hardware real, mas prova
@@ -849,10 +860,14 @@ Módulos principais (mic local, sempre ativos):
   Acessibilidade ainda não concedida) fazia a ação simplesmente NÃO
   FAZER NADA, sem erro, sem log, sem jeito de saber o que aconteceu.
   Agora vira `CalledProcessError`, capturado por
-  `main._listen_loop_safe` e avisado por notificação. `play_sound()` é
+  `main._listen_loop_safe` e avisado por notificação — com o `.stderr`
+  já DECODIFICADO (str, não bytes), que `main.py` anexa à notificação.
+  Sem isso ela mostrava só "exit status 1": `str(CalledProcessError)`
+  nunca inclui `.stderr`, então o erro real do osascript ficava
+  invisível justamente quando era ele que explicava a falha. `play_sound()` é
   a exceção de propósito: usa `Popen` (não-blocking) e ENGOLE falha —
   é earcon (`config.DICTATION_OPEN_SOUND`/`DICTATION_SEND_SOUND`), não
-  pode travar o loop de ditado nem parecer que a ação real falhou. 18
+  pode travar o loop de ditado nem parecer que a ação real falhou. 19
   testes (`test_actions.py`, mockando `subprocess.run`/`Popen` —
   primeira cobertura deste arquivo).
 - `main.py` — o app de barra de menu (rumps). Escolhe automaticamente
@@ -924,7 +939,7 @@ Módulos principais (mic local, sempre ativos):
   timer relê `_current_state` na hora de voltar em vez de capturar o
   estado de antes: entre o flash e o disparo dá tempo de parar a
   escuta, começar outro ditado ou dar erro, e nenhum desses pode ser
-  desfeito por um timer velho. 95 testes
+  desfeito por um timer velho. 101 testes
   (`test_main.py` — primeira cobertura deste arquivo; dubla `rumps`,
   `faster_whisper` e `sounddevice` pra rodar em sandbox, cobre escolha
   de dispositivo, os guards de "Iniciar escuta" e o checkmark do
@@ -989,9 +1004,17 @@ Módulos de entrada alternativa (compartilham o mesmo
   fechava o ditado e a segunda caía numa sessão OCIOSA, onde wake word
   sozinha quer dizer "abre a IA padrão". Resultado: cada envio abria
   uma aba nova do Claude e deixava o app preso em modo ditado de novo.
+  Transcreve com `vad_filter=True`: toda transcrição aqui já vem de uma
+  wake word CONFIRMADA acusticamente, então uma alucinação do Whisper
+  nesse instante descarta um comando deliberado sem deixar rastro
+  nenhum (nem no "Heard:", que só existe no loop contínuo) — ver a
+  limitação 10.
 - `audio_file_input.py` — transcreve um arquivo de áudio (voice notes
-  etc.) ou vigia uma pasta. **Ainda não plugado em `main.py`** — sem
-  menu nem forma de escolher a pasta ainda.
+  etc.) ou vigia uma pasta. Transcreve com `vad_filter=True` como os
+  outros dois caminhos (nota de voz quase sempre tem silêncio nas
+  pontas, e alucinação em cima disso entraria como conteúdo ditado).
+  **Ainda não plugado em `main.py`** — sem menu nem forma de escolher
+  a pasta ainda.
 
 Configuração e distribuição (o que mudou o jeito de instalar):
 - `user_settings.py` — a sobreposição pessoal descrita nas decisões
@@ -999,10 +1022,15 @@ Configuração e distribuição (o que mudou o jeito de instalar):
   validador por chave (`VALIDATORS`). Valor inválido cai SOZINHO, sem
   levar o arquivo junto. `settings_path()` respeita a env var
   `VISPER_SETTINGS_PATH`, que é como os testes nunca tocam no arquivo
-  real. 30 testes.
+  real. 33 testes.
 - `setup_visper.py` — assistente de primeira configuração. Só
   biblioteca padrão de propósito: a primeira coisa que a pessoa faz é
-  ANTES de instalar qualquer dependência. Sorteia o tópico, e no fim
+  ANTES de instalar qualquer dependência. Valida os códigos de idioma
+  ANTES de gravar (mesma checagem do menu do app): sem isso
+  `save_settings()` descartava um código inválido em silêncio e
+  devolvia True — o arquivo FOI escrito, só não com aquela chave — e o
+  script imprimia "Salvo: TRANSCRIPTION_LANGUAGES" como se tivesse
+  funcionado. 5 testes (`test_setup_visper.py`). Sorteia o tópico, e no fim
   imprime (e copia com `pbcopy`) o link do iPhone com o tópico no
   FRAGMENTO da URL — que navegador nenhum manda pro servidor, então
   não aparece em log do GitHub Pages.
@@ -1050,12 +1078,16 @@ Ferramentas de apoio:
 - `doctor.py` — confere a config antes de rodar (dependências
   instaladas, dispositivo de entrada preferido detectável agora,
   tópico do ntfy não é óbvio/curto, Porcupine com as duas chaves ou
-  nenhuma, `DEFAULT_AI` existe em `AI_TRIGGERS`). O check de
+  nenhuma, `DEFAULT_AI` existe em `AI_TRIGGERS`, e chaves do settings.json que
+  foram RECUSADAS pelos validadores — este último fecha um ponto cego
+  real: uma chave recusada é descartada em silêncio e o app segue com
+  o PADRÃO, então "configurei português e continua só em inglês" não
+  aparecia em lugar nenhum). O check de
   dispositivo (`check_input_device()`) é só informativo — nunca conta
   como problema, porque não ter o mic ligado/pareado na hora de rodar
   `doctor.py` não é erro de config. Rodar `python3 doctor.py` antes de
   `python3 main.py`.
-- `test_*.py` — 430 testes no total. Rodar com:
+- `test_*.py` — 432 testes no total. Rodar com:
   `python3 -m unittest discover -p "test_*.py"`
 
 iOS (`ios/SendToVisperIntent.swift`) — rascunho do App Intent que
@@ -1246,15 +1278,27 @@ mudar bastante antes de virar assets de produção.
    causa raiz (a regra de proteção) continua lá pra próxima branch de
    trabalho — vale checar aquele menu de Settings antes de assumir que
    "quase nada funciona" é bug de código.
-10. `vad_filter=True` e `hotwords` foram acrescentados só no loop do
-   Whisper contínuo (`main._listen_loop_whisper`).
-   `porcupine_session.py` e `audio_file_input.py` continuam sem os
-   dois — neles o áudio já vem recortado por outra coisa (detecção
-   acústica / arquivo escolhido a dedo), então alucinação de silêncio
-   é bem menos provável e a prioridade de vocabulário importa menos
-   (o Porcupine já detectou a wake word pelo SOM); e mexer neles
-   quebraria os dublês de modelo dos testes, que fixam a assinatura
-   `transcribe(audio, language=None)`.
+10. ~~`vad_filter=True` e `hotwords` foram acrescentados só no loop do
+   Whisper contínuo.~~ **PARCIALMENTE CORRIGIDO**: hoje `vad_filter=True`
+   vale nos TRÊS caminhos de transcrição (`main._listen_loop_whisper`,
+   `porcupine_session._transcribe`, `audio_file_input`). A
+   justificativa antiga pra deixar de fora ("o áudio já vem recortado
+   por outra coisa, então alucinação de silêncio é bem menos
+   provável") não sobreviveu à revisão: menos provável não é
+   improvável, e a CONSEQUÊNCIA no caminho do Porcupine é pior que no
+   loop contínuo, não melhor — lá toda transcrição já vem de uma wake
+   word CONFIRMADA acusticamente, ou seja, do instante exato em que a
+   pessoa tentou falar com o app. Uma alucinação ali não bate com
+   nenhum apelido de IA, o roteador devolve None, e o comando é
+   descartado CALADO — sem nem aparecer no "Heard:", que só existe no
+   loop do Whisper contínuo. Reproduzido com o motor de verdade: o
+   mesmo evento de wake word abre a IA quando o trecho vem vazio e não
+   abre NADA quando o Whisper devolve uma alucinação no lugar.
+   `hotwords` continua SÓ no loop contínuo, e isso segue deliberado:
+   ele enviesa a decodificação pro vocabulário de comando, que é o
+   problema de "não ouvi a wake word" — exatamente o que o Porcupine
+   (detecção acústica) e um arquivo escolhido a dedo já resolvem por
+   outro caminho.
 11. **"vIsper, cancela" não funciona no modo Porcupine.** Lá a wake
    word FECHA o ditado no instante em que o Porcupine a reconhece
    acusticamente — a palavra "cancela" vem depois disso e nunca chega
@@ -1381,9 +1425,19 @@ Atualizar esta lista sempre que algo sair do "nunca testado":
    - **os ajustes pelo menu** ("Wake word…", "Spoken languages…") —
      conferir principalmente que trocar o idioma vale na hora, sem
      reabrir o app;
+   - **parar no MEIO de um ditado**: abrir uma IA, falar meia frase,
+     clicar em "Stop listening" sem fechar o ditado, e conferir que
+     aparece um aviso de que o trecho foi descartado. Depois voltar a
+     escutar e falar uma frase comum que contenha "over"/"câmbio"
+     (ex.: "vou passar o bastão, over and out") — NADA pode ser colado
+     nem mandado. Era esse o ditado fantasma;
    - **no iPhone**: ditar pela tecla de microfone do TECLADO (não pelo
      botão do app) e não encostar em mais nada — tem que mandar
-     sozinho depois de uns segundos.
+     sozinho depois de uns segundos;
+   - **no iPhone, cancelamentos**: com a contagem de 3s rodando, tocar
+     no chip de OUTRA IA (ou abrir Settings) tem que CANCELAR o envio,
+     não mandar assim mesmo — e tocar em "Send to Mac" no meio de um
+     ditado tem que mandar UMA vez só, não duas.
    - **"Recent activity…"** é o que usar quando algo NÃO funcionar:
      em vez de tentar de novo e torcer, abrir ali e comparar as duas
      colunas — se o `heard` mostrar a frase certa mas não houver `→`
