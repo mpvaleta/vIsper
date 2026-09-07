@@ -42,7 +42,22 @@ def transcribe_and_handle(path, model, session, language=None):
     if not is_supported_audio_file(path):
         return f"formato não suportado: {path.suffix}"
 
-    segments, _info = model.transcribe(str(path), language=language)
+    # vad_filter=True pelo mesmo motivo de main._listen_loop_whisper() e
+    # porcupine_session._transcribe(): sem ele o Whisper ALUCINA em cima
+    # de trecho sem fala (costuma devolver "Legendas pela comunidade
+    # Amara.org" e afins, resquício do treino em vídeo legendado). Aqui
+    # isso não é hipotético: nota de voz quase sempre tem silêncio no
+    # começo e no fim (a pessoa aperta gravar, pausa, fala), e essa
+    # alucinação entraria como se fosse conteúdo ditado — colada no chat
+    # junto com o que ela falou de verdade.
+    #
+    # `hotwords` continua de fora aqui, e isso é deliberado: ele enviesa
+    # a decodificação pro vocabulário de comando, e um arquivo escolhido
+    # a dedo não é o caso de "não ouvi a wake word" que motivou o
+    # hotwords existir (ver config.transcription_hotwords()).
+    segments, _info = model.transcribe(
+        str(path), language=language, vad_filter=True
+    )
     # Os segmentos do faster-whisper já vêm com o espaço embutido no
     # início de cada um (característica do tokenizer) — juntar com
     # " ".join() duplicava o espaço entre eles. Concatena direto e

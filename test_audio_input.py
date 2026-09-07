@@ -136,8 +136,8 @@ class LabelDevicesTest(unittest.TestCase):
         result = audio_input.label_devices(devices)
         labels = [label for _i, _n, label in result]
         self.assertEqual(len(set(labels)), 2)  # os dois rótulos ficam ÚNICOS
-        self.assertIn("WH-1000XM5 (índice 0)", labels)
-        self.assertIn("WH-1000XM5 (índice 1)", labels)
+        self.assertIn("WH-1000XM5 (index 0)", labels)
+        self.assertIn("WH-1000XM5 (index 1)", labels)
 
     def test_nome_original_preservado_mesmo_com_rotulo_desambiguado(self):
         # Seleção/persistência usam o NOME (2º item da tupla), não o

@@ -13,8 +13,18 @@ iPhone. Faz exatamente o que o rascunho Swift (`SendToVisperIntent.swift`)
 faria — publicar o comando no tópico ntfy que o Mac escuta — só que
 sem compilar nada, sem expirar, e funcionando também no Apple Watch.
 
-**Pré-requisito:** o `NTFY_TOPIC` já configurado no `config.py` do Mac
-e o vIsper rodando lá. Sem isso não há quem escute.
+**Pré-requisito:** o vIsper rodando no Mac e já com um tópico do ntfy
+configurado. Sem isso não há quem escute.
+
+O tópico **não** fica no `config.py` — esse arquivo é público, e o
+tópico é, na prática, a senha que impede qualquer pessoa do mundo de
+disparar automação no seu Mac. Ele mora fora do repositório. Pra
+descobrir o seu, escolha o caminho que combina com como você instalou:
+
+| Como você instalou | Onde está o tópico |
+|---|---|
+| Pelo `.dmg` | No próprio app: menu do vIsper → **iPhone connection…**. Ele mostra o tópico atual; se ainda não houver nenhum, digite `new` ali e o vIsper sorteia um, mostra na tela e copia pro clipboard |
+| Pelo repositório | O link que `python3 setup_visper.py` imprime e copia, ou `~/Library/Application Support/vIsper/settings.json` |
 
 ---
 
@@ -43,24 +53,31 @@ e o vIsper rodando lá. Sem isso não há quem escute.
    — abre o Claude, cola a pergunta e aperta Enter, tudo num disparo
    só.
 
-   **Importante — sempre comece ditando o nome de uma IA**
-   ("claude", "chatgpt", "perplexity" ou "gemini"), igual ao exemplo
-   acima. O Mac só abre alguma coisa se um desses nomes vier logo
-   depois de "vIsper" — sem um deles, a mensagem chega e não abre
-   NADA, sem erro nenhum dos dois lados (o "over" que este Atalho
-   sempre gruda no fim impede o comportamento padrão de "só a wake
-   word abre a IA de sempre" de valer aqui). Ex.: dite "claude qual é
-   a previsão do tempo", nunca só "qual é a previsão do tempo".
+   **Dizer o nome da IA é opcional.** Se você começar ditando
+   "claude", "chatgpt", "perplexity" ou "gemini", abre aquela; se não
+   disser nenhum, abre a sua IA padrão (`DEFAULT_AI`, que vem como
+   Claude). Ou seja, "qual é a previsão do tempo" sozinho funciona.
+
+   *(Isso mudou: até pouco tempo atrás, uma mensagem sem nome de IA
+   chegava no Mac e não abria NADA, sem erro nenhum dos dois lados —
+   porque o "over" que este Atalho sempre gruda no fim impedia o
+   comportamento de "só a wake word abre a IA de sempre" de valer
+   aqui. Se o seu Mac ainda estiver numa versão antiga do vIsper e
+   nada acontecer, é isso: ou atualize o app, ou volte a começar
+   dizendo o nome da IA.)*
+
+   **A wake word do passo 3 tem que ser a MESMA do Mac.** O padrão é
+   "vIsper" nos dois lados. Se você trocou no Mac (menu → **Wake
+   word…**), troque aqui também — senão a mensagem chega e não bate
+   com nada. Pra conferir o que o Mac está recebendo de verdade, veja
+   **Recent activity…** no menu dele: toda mensagem vinda do telefone
+   aparece ali marcada como `phone`, mesmo quando não casa com nada.
 
 4. **Adicionar ação** → busque **"Obter conteúdo do URL"**.
    - No campo URL: `https://ntfy.sh/SEU_TOPICO`
-     (troque `SEU_TOPICO` pelo tópico de verdade — **não** o
-     `NTFY_TOPIC` que aparece em `config.py`: esse arquivo é
-     versionado e público, então `NTFY_TOPIC` nele é sempre `""`. O
-     valor de verdade está no link que `python3 setup_visper.py`
-     imprimiu/copiou, ou em
-     `~/Library/Application Support/vIsper/settings.json` no Mac —
-     tem que ser idêntico, sem `https://` duplicado)
+     (troque `SEU_TOPICO` pelo tópico de verdade — o mesmo do
+     pré-requisito lá em cima. Tem que ser idêntico ao do Mac, sem
+     `https://` duplicado)
    - Toque em **Mostrar mais**
    - **Método**: mude de GET pra **POST**
    - **Corpo da solicitação**: mude pra **Arquivo**
@@ -93,13 +110,20 @@ Com o atalho salvo, todos estes caminhos já funcionam de graça:
 
 ## Se não funcionar
 
+**Antes de qualquer coisa: abra o menu do vIsper no Mac → Recent
+activity…** Toda mensagem que chega do telefone aparece ali marcada
+como `phone`, com o texto exato que o Mac recebeu, mesmo quando ela
+não casa com nada. Isso separa em um olhar "não chegou" de "chegou e
+não bateu com nada" — que é a dúvida que costuma custar meia hora.
+
 | Sintoma | Provável causa |
 |---|---|
-| Atalho roda, Mac não reage | Tópico diferente entre iPhone e o vIsper (ver passo 4 — não é o `NTFY_TOPIC` de `config.py`), ou o vIsper não está rodando no Mac |
+| Nada em "Recent activity" | O Mac não recebeu: tópico diferente entre iPhone e vIsper (ver o pré-requisito lá em cima — não é o `NTFY_TOPIC` de `config.py`), ou o vIsper não está rodando |
+| Aparece em "Recent activity" mas não abre nada | A wake word do Atalho não bate com a do Mac (passo 3), ou está escrita diferente do que o Mac espera |
 | Erro de rede no atalho | URL malformada — confira se é `https://ntfy.sh/topico`, sem barra no fim |
 | Mac reage mas não cola nada | Permissão de Acessibilidade faltando no Mac (ver README) |
 | Abre a IA mas fica esperando | O `over` do passo 3 não entrou na frase — confira que ele está DEPOIS da variável |
-| Nada acontece, nenhum erro em lugar nenhum | Você não começou ditando o nome de uma IA (ver aviso no passo 3) — "qual é a previsão" sozinho não abre nada; tem que ser "claude qual é a previsão" |
+| Abre o Claude Code em vez do Claude, ou some sem explicação | Você ditou algo começando com "code"/"código" logo depois de "claude". Pelo Atalho o texto é livre, então isso ainda pode acontecer — dite "claude, revisa este código" em vez de "claude código revisa". (No app de iPhone via navegador isso já não acontece mais: lá o chip manda a IA escolhida separada do texto.) |
 
 Teste o lado do Mac isolado antes de culpar o iPhone — pelo Terminal
 do próprio Mac:

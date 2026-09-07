@@ -571,6 +571,25 @@
   var recording = false;
   var countdownTimer = null;
   var idleTimer = null;
+  // True entre o recog.start() e o primeiro evento que ele produzir.
+  // Existe so pra fechar a corrida de toque duplo (ver startDictation).
+  var starting = false;
+  // A pessoa pediu pra parar antes de o reconhecimento ficar de pe.
+  // Sem registrar isso, o stop() ia embora sem produzir evento nenhum
+  // (o estado travado do iOS que o vigia existe pra cobrir) e o
+  // microfone abria DEPOIS do pedido de parar.
+  var pendingStop = false;
+  // Vigia o caso em que start() nao lanca excecao mas NENHUM evento
+  // chega — falha conhecida do Web Speech no iOS, principalmente com o
+  // app rodando a partir da tela de inicio. Sem isto o botao ficava
+  // preso em "comecando" pra sempre e nao dava pra tentar de novo.
+  var startWatchdog = null;
+  var START_TIMEOUT_MS = 2500;
+  // Uma sessao de reconhecimento cujo conteudo ja foi mandado na mao
+  // (tocou "Send to Mac" enquanto ainda ditava). onresult/onend desta
+  // sessao passam a ignorar o que vier depois — ver o comentario em
+  // startDictation() pro bug real que isto fecha.
+  var sentWhileDictating = false;
   // Quanto tempo sem digitar/ditar antes de considerar "ela terminou".
   // 2.5s + os 3s da contagem = 5.5s de silencio total antes de sair —
   // folgado o bastante pra pausa de quem esta compondo a frase, curto
@@ -683,6 +702,14 @@
       b.setAttribute("aria-pressed", String(s.ai === ai.id));
       b.innerHTML = '<span class="swatch"></span>' + ai.label;
       b.addEventListener("click", function () {
+        // Mesma regra do campo de texto: mexer em QUALQUER coisa que
+        // mude o que vai ser mandado cancela um envio pendente. Sem
+        // isso, trocar de IA durante a contagem (pra corrigir o
+        // alvo, não pra mandar) deixava "Tap to cancel" na tela mas
+        // mandava do mesmo jeito, pra IA nova, sem confirmação
+        // nenhuma — a troca virava um envio disfarçado.
+        cancelCountdown();
+        cancelIdleAutoSend();
         s.ai = ai.id;
         save();
         buildAiGrid();
@@ -714,13 +741,29 @@
   }
 
   function startDictation() {
-    if (recording) { stopDictation(); return; }
+    // `recording` so vira true no onstart, que e ASSINCRONO — dois
+    // toques rapidos caiam os dois nesta funcao antes disso e criavam
+    // um SEGUNDO reconhecimento. O primeiro virava orfao: continuava
+    // ouvindo e escrevendo no campo pela propria closure (com o proprio
+    // `base` capturado), enquanto `recog` ja apontava pro segundo —
+    // entao stopDictation() so parava um deles e o texto saia
+    // duplicado. `starting` fecha essa janela.
+    if (recording || starting) { pendingStop = true; stopDictation(); return; }
     var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Rec) return;
 
     cancelCountdown();
     cancelIdleAutoSend();
+    pendingStop = false;
+    sentWhileDictating = false;
     recog = new Rec();
+    // Identidade desta sessao. Os handlers sao closures, mas mexem em
+    // estado de MODULO (starting/recording/startWatchdog) — e nada os
+    // desliga do objeto antigo. Sem esta checagem, um evento atrasado
+    // de um reconhecimento ja abandonado pelo vigia derrubava as
+    // protecoes do reconhecimento SEGUINTE: matava o vigia dele e
+    // zerava `starting`, que e exatamente a guarda de toque duplo.
+    var sessao = recog;
     recog.lang = navigator.language || "en-US";
     recog.interimResults = true;
     recog.continuous = false;
@@ -728,7 +771,26 @@
     var base = $("text").value;
     if (base && !/\s$/.test(base)) base += " ";
 
+    // Qualquer erro desta sessao de reconhecimento. onend dispara
+    // SEMPRE, inclusive depois de onerror — sem lembrar que houve erro,
+    // o onend abaixo tratava a falha como "terminou normalmente".
+    var erro = null;
+    var permissaoNegada = false;
+
     recog.onstart = function () {
+      if (sessao !== recog) return;
+      clearStartWatchdog();
+      starting = false;
+      if (pendingStop) {
+        // Ela tocou pra parar enquanto isto ainda estava subindo.
+        pendingStop = false;
+        try { sessao.abort(); } catch (e) {}
+        recording = false;
+        $("btn-mic").setAttribute("data-recording", "false");
+        $("btn-mic").setAttribute("aria-label", "Start dictation");
+        setStatus("idle", "Ready");
+        return;
+      }
       recording = true;
       $("btn-mic").setAttribute("data-recording", "true");
       $("btn-mic").setAttribute("aria-label", "Stop dictation");
@@ -736,6 +798,14 @@
     };
 
     recog.onresult = function (ev) {
+      if (sessao !== recog) return;
+      // Ja mandou na mao enquanto isto ainda ditava (ver o handler de
+      // #btn-send): ignora qualquer resultado que chegue depois —
+      // inclusive o resultado FINAL que recog.stop() ainda produz —
+      // senao ele reescreve o campo (ja limpo pelo envio) por cima, e
+      // o onend logo depois acha o campo cheio de novo e comeca outra
+      // contagem sozinha, mandando de novo o que ja tinha ido.
+      if (sentWhileDictating) return;
       var txt = "";
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         txt += ev.results[i][0].transcript;
@@ -744,6 +814,12 @@
     };
 
     recog.onerror = function (ev) {
+      if (sessao !== recog) return;
+      clearStartWatchdog();
+      starting = false;
+      erro = ev.error || "unknown";
+      permissaoNegada =
+        ev.error === "not-allowed" || ev.error === "service-not-allowed";
       recording = false;
       $("btn-mic").setAttribute("data-recording", "false");
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
@@ -758,9 +834,39 @@
     };
 
     recog.onend = function () {
+      if (sessao !== recog) return;
+      clearStartWatchdog();
+      starting = false;
       recording = false;
       $("btn-mic").setAttribute("data-recording", "false");
       $("btn-mic").setAttribute("aria-label", "Start dictation");
+
+      // Ja foi mandado na mao enquanto ainda ditava — nao reabre
+      // contagem nenhuma em cima disso. Ver o comentario completo no
+      // handler de #btn-send.
+      if (sentWhileDictating) return;
+
+      // Terminou por ERRO: nao comeca a contagem de envio. O que
+      // estivesse no campo era resto de uma tentativa anterior ou uma
+      // captura parcial, e mandar isso sozinho e irreversivel — alem
+      // de apagar da tela o aviso que o onerror acabou de por ("No
+      // mic" virava "Ready" no mesmo instante, contradizendo o toast).
+      // Rearma so a ociosidade: se ela mesma tinha digitado algo, a
+      // janela normal de 2,5s + 3s ainda manda sozinho, com tempo de
+      // cancelar.
+      //
+      // MENOS quando o microfone foi BLOQUEADO. Ali rearmar anulava o
+      // proprio motivo desta ramificacao existir: o texto saia sozinho
+      // 2,5s depois, por cima do aviso "Microphone blocked" que acabou
+      // de aparecer — virava um atraso, nao uma recusa. E o que esta no
+      // campo nesse caso e resto de outra tentativa, nao uma frase que
+      // ela terminou. Digitar qualquer coisa rearma de novo, entao
+      // ninguem fica presa: e so o envio SEM acao nenhuma que para.
+      if (erro) {
+        if (!permissaoNegada) armIdleAutoSend();
+        return;
+      }
+
       if ($("text").value.trim()) {
         if (s.autosend) startCountdown();
         else setStatus("idle", "Ready");
@@ -769,8 +875,45 @@
       }
     };
 
-    try { recog.start(); }
-    catch (e) { toast("Could not start dictation.", "error"); }
+    starting = true;
+    try {
+      recog.start();
+      armStartWatchdog();
+    } catch (e) {
+      starting = false;
+      toast("Could not start dictation.", "error");
+    }
+  }
+
+  // O Web Speech no iOS as vezes aceita o start() e nunca dispara nada
+  // — nem onstart, nem onerror, nem onend. Sem vigia, o app ficava
+  // travado achando que esta comecando, e o botao nao respondia mais.
+  // O caminho que sempre funciona (a tecla de microfone do TECLADO)
+  // continua disponivel, entao o aviso aponta pra ele.
+  function armStartWatchdog() {
+    clearStartWatchdog();
+    startWatchdog = setTimeout(function () {
+      startWatchdog = null;
+      if (!starting || recording) return;
+      starting = false;
+      try { if (recog) recog.abort(); } catch (e) {}
+      $("btn-mic").setAttribute("data-recording", "false");
+      $("btn-mic").setAttribute("aria-label", "Start dictation");
+      setStatus("idle", "Ready");
+      toast("Dictation did not start. Use the microphone key on your keyboard.",
+            "error");
+      // NAO rearma o envio automatico. O que estiver no campo aqui nao
+      // veio desta tentativa (ela falhou) — e com "Keep text after
+      // sending" ligado e literalmente a mensagem ANTERIOR, ja mandada.
+      // Rearmar transformava um toque num microfone travado em um
+      // segundo envio identico, sem digitar nada: no Mac, outro colar e
+      // outro Enter da mesma frase.
+    }, START_TIMEOUT_MS);
+  }
+
+  function clearStartWatchdog() {
+    clearTimeout(startWatchdog);
+    startWatchdog = null;
   }
 
   function stopDictation() {
@@ -782,6 +925,18 @@
   // 3s existe porque transcricao erra, e mandar coisa errada pro chat e
   // pior do que um toque a mais.
   function startCountdown() {
+    // Matar a contagem anterior ANTES de comecar outra. Sem isto, a
+    // segunda chamada sobrescrevia `countdownTimer` e o primeiro
+    // setInterval ficava orfao, rodando solto: cancelar depois limpava
+    // so o id mais novo, e o orfao mandava a mensagem assim mesmo —
+    // depois de a pessoa ter tocado em "Tap to cancel". Enviar apos um
+    // cancelamento explicito e o pior desfecho possivel aqui, e e
+    // irreversivel.
+    //
+    // Reproduzido com o onend disparando duas vezes, que e o que o
+    // Web Speech do iOS faz de verdade (e o que a corrida de toque
+    // duplo produzia antes de ser corrigida).
+    cancelCountdown();
     cancelIdleAutoSend();
     var SEGUNDOS = 3;
     var ring = document.querySelector(".ring");
@@ -860,10 +1015,27 @@
 
   // ---------------- envio ----------------
   function buildMessage(texto) {
-    // Uma string so, no formato que dictation.py resolve numa chamada
-    // unica: wake word + nome da IA + conteudo + gatilho de fechamento.
-    // E exatamente o caminho "abre e fecha no MESMO trecho".
-    return s.wake + " " + s.ai + " " + texto + " over";
+    // Duas linhas. A primeira leva a IA JA RESOLVIDA — ela tocou no
+    // chip, entao nao ha nada pra adivinhar.
+    //
+    // Bug real que isso corrige: antes o id da IA ia so na prosa, e o
+    // Mac tinha que redescobrir por texto livre o que o toque ja sabia.
+    // Conteudo comecando com "code"/"codigo" (ou qualquer palavra
+    // parecida — o casamento la e fuzzy, "coding is hard" tambem
+    // batia) virava o gatilho de duas palavras "claude code", que o
+    // relay BLOQUEIA por seguranca. A mensagem sumia inteira e este
+    // app mostrava "Sent to your Mac" do mesmo jeito, porque o POST
+    // pro ntfy tinha dado 200.
+    //
+    // A segunda linha continua sendo a mensagem COMPLETA de sempre
+    // ("<wake> <ia> <texto> over"), de proposito: um Mac ainda nao
+    // atualizado ignora a primeira linha (ela vem ANTES da wake word,
+    // entao o roteador de la nem olha pra ela) e continua funcionando
+    // exatamente como antes. Este app se atualiza sozinho pelo GitHub
+    // Pages, o app do Mac so quando ela reinstala — entao "telefone
+    // novo + Mac velho" e o estado provavel, e nao pode quebrar.
+    return "#visper-ai=" + s.ai + "\n" +
+           s.wake + " " + s.ai + " " + texto + " over";
   }
 
   function send() {
@@ -900,6 +1072,16 @@
 
   // ---------------- configuracao ----------------
   function openSettings() {
+    // Sair da tela principal com uma contagem de envio rodando não
+    // pode deixar ela rodando por baixo: "Tap to cancel" (o único
+    // jeito de cancelar) fica invisível na tela de configuração, e o
+    // envio disparava sozinho 3s depois — inclusive contra um tópico
+    // NOVO, se a pessoa trocasse e salvasse antes daqueles 3s. Mesmo
+    // tratamento SILENCIOSO que digitar no campo já dá ao cancelar: o
+    // rascunho continua no campo, sem toast — voltar pra tela
+    // principal já mostra que nada foi mandado.
+    cancelCountdown();
+    cancelIdleAutoSend();
     $("in-topic").value = s.topic;
     $("in-wake").value = s.wake;
     $("in-autosend").checked = s.autosend;
@@ -924,7 +1106,15 @@
     var t = $("in-topic").value.trim();
     // Tolera colar a URL inteira do ntfy em vez do topico solto — e o
     // erro mais provavel, e da pra corrigir sozinho.
-    t = t.replace(/^https?:\/\/ntfy\.sh\//i, "").replace(/\/+$/, "");
+    t = t.replace(/^https?:\/\/ntfy\.sh\//i, "");
+    // Corta query string e fragmento tambem — plausivel de sobrar se
+    // o topico foi copiado da barra de enderecos depois de abrir ele
+    // no proprio site do ntfy (ex.: "...topico?poll=1"). Sem isto, o
+    // topico salvo virava um DIFERENTE do de verdade (o servidor trata
+    // "topico" e "topico?poll=1" como topicos distintos), sem aviso
+    // nenhum — parecia ter conectado, mas nunca chegava nada no Mac.
+    t = t.split(/[?#]/)[0];
+    t = t.replace(/\/+$/, "");
 
     s.topic = t;
     s.wake = $("in-wake").value.trim() || defaults.wake;
@@ -953,6 +1143,17 @@
     // de cancelar nao teria servido pra nada.
     if (cancelCountdown()) { cancelIdleAutoSend(); return; }
     cancelIdleAutoSend();
+    if (recording) {
+      // Mandar na MAO enquanto ainda dita: o reconhecimento continua
+      // vivo se nao for parado agora, e reproduzia sozinho um SEGUNDO
+      // envio depois — onresult sobrescrevia o campo (ja limpo por
+      // send()) com o texto continuando a chegar, e onend, ao
+      // terminar, achava o campo cheio de novo e comecava outra
+      // contagem. `sentWhileDictating` fecha as duas pontas: onresult
+      // e onend desta sessao passam a ignorar tudo que vier depois.
+      sentWhileDictating = true;
+      stopDictation();
+    }
     send();
   });
   // Mexer no texto durante a contagem cancela o envio: sinal claro de

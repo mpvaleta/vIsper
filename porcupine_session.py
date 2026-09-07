@@ -92,7 +92,23 @@ class PorcupineSession:
         if not frames:
             return ""
         audio = np.concatenate(frames).astype(np.float32) / 32768.0
-        segments, _info = self.model.transcribe(audio, language=self.language)
+        # vad_filter=True: sem ele, o Whisper pode ALUCINAR em cima de
+        # trecho sem fala de verdade e devolver texto que não bate com
+        # nenhum apelido de IA — e aqui isso é pior que na v1 (Whisper
+        # contínuo), porque TODA chamada aqui já vem de uma wake word
+        # CONFIRMADA acusticamente pelo Porcupine: é o momento em que a
+        # pessoa acabou de tentar falar com o app. Uma alucinação nesse
+        # instante específico faz `CommandRouter._decide()` não achar
+        # nenhum gatilho e devolver None — o comando é jogado fora
+        # CALADO, sem nem aparecer no "Heard:" (que só existe no loop
+        # do Whisper contínuo). Reproduzido: o mesmo evento de wake
+        # word acústica abre a IA quando o trecho transcrito vem vazio
+        # (silêncio de verdade, o vad_filter cortou antes) e não abre
+        # NADA quando o Whisper devolve uma alucinação não-vazia no
+        # lugar — o pior desfecho possível bem na abertura do app.
+        segments, _info = self.model.transcribe(
+            audio, language=self.language, vad_filter=True
+        )
         # mesma correção de audio_file_input.py/main.py: não juntar
         # com espaço extra, os segmentos já vêm com ele embutido.
         text = "".join(seg.text for seg in segments)

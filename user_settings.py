@@ -80,12 +80,26 @@ def _is_positive_int(value):
 
 
 def _is_lang_code_list(value):
-    """TRANSCRIPTION_LANGUAGES: lista de códigos curtos ("pt", "en").
-    Lista VAZIA é válida e significa "sem restrição". Não valida contra
-    a lista completa de códigos do Whisper (mudaria a cada versão do
-    modelo), só a FORMA."""
+    """TRANSCRIPTION_LANGUAGES: lista de códigos que o Whisper aceita.
+    Lista VAZIA é válida e significa "sem restrição".
+
+    Valida contra config.SUPPORTED_LANGUAGE_CODES, não só a FORMA:
+    checar só o tamanho deixava passar "pt-br"/"eng"/"por", que o
+    Whisper rejeita com exceção lá na frente, DENTRO do laço de
+    transcrição — a escuta morria inteira e nada ligava isso à
+    configuração salva minutos antes."""
+    import config
+
+    # Compara EXATO, sem .lower(): o que é validado aqui é o que vai
+    # ser GRAVADO e depois entregue ao Whisper. Aceitar "PT" na
+    # checagem e gravar "PT" mesmo assim reproduzia exatamente a falha
+    # que esta validação existe pra impedir. O menu do app já
+    # normaliza pra minúscula antes de chegar aqui; um settings.json
+    # editado à mão com "PT" é descartado sozinho (sem levar o resto do
+    # arquivo junto), que é o comportamento seguro.
+    validos = set(config.SUPPORTED_LANGUAGE_CODES)
     return isinstance(value, list) and all(
-        isinstance(v, str) and 2 <= len(v) <= 8 for v in value
+        isinstance(v, str) and v in validos for v in value
     )
 
 

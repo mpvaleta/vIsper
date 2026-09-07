@@ -41,8 +41,13 @@ class FakeModel:
         self._responses = list(responses)  # uma resposta por chamada
         self.calls = []
 
-    def transcribe(self, audio, language=None):
+    def transcribe(self, audio, language=None, **kwargs):
+        # **kwargs aceita vad_filter/hotwords etc. sem travar quando a
+        # chamada real passar mais parâmetros — o que importa aqui é
+        # registrar a CHAMADA (pra test_transcricao_usa_vad_filter
+        # conferir os kwargs de verdade), não reimplementar o Whisper.
         self.calls.append(audio)
+        self.kwargs_usados = kwargs
         text = self._responses.pop(0) if self._responses else ""
         return [FakeSegment(text)], None
 

@@ -51,7 +51,12 @@ class AudioFileInputTest(unittest.TestCase):
 
             result = afi.transcribe_and_handle(path, model, session)
 
-            model.transcribe.assert_called_once_with(path, language=None)
+            # vad_filter=True: sem ele o Whisper alucina em cima do
+            # silêncio que quase toda nota de voz tem nas pontas, e
+            # essa alucinação entraria como conteúdo ditado.
+            model.transcribe.assert_called_once_with(
+                path, language=None, vad_filter=True
+            )
             session.handle.assert_called_once_with("vIsper claude confirma o teste")
             self.assertEqual(result, "abriu claude — ouvindo ditado")
         finally:

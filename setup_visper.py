@@ -136,13 +136,35 @@ def main():
     print("   'pt, en'  -> alterna entre os dois com segurança")
     print("   'auto'    -> sem restrição (aceita o erro de detecção junto)")
     atual = ", ".join(config.TRANSCRIPTION_LANGUAGES) or "auto"
-    resposta_idioma = ask("   ", atual).strip().lower()
-    if resposta_idioma in ("auto", "none", ""):
-        novas_linguas = []
-    else:
+    while True:
+        resposta_idioma = ask("   ", atual).strip().lower()
+        if resposta_idioma in ("auto", "none", ""):
+            novas_linguas = []
+            break
         novas_linguas = [
             parte.strip() for parte in resposta_idioma.split(",") if parte.strip()
         ]
+        # Validar ANTES de deixar seguir — sem isto, save_settings()
+        # descarta um código inválido em silêncio (só a FORMA que
+        # importa lá é 2-8 caracteres) e devolve True porque o ARQUIVO
+        # foi escrito com sucesso, mesmo que essa chave específica não
+        # tenha entrado. O script então imprimia "Salvo:
+        # TRANSCRIPTION_LANGUAGES" — uma confirmação falsa — e o app
+        # continuava rodando com o idioma antigo/padrão, reproduzindo
+        # bem aqui a exata falha ("só funciona em inglês") que esta
+        # pergunta existe pra evitar. "português"/"pt-BR"/"eng" são
+        # justamente os palpites naturais de quem fala português — o
+        # próprio erro que esta pergunta espera.
+        invalidos = [
+            c for c in novas_linguas if c not in config.SUPPORTED_LANGUAGE_CODES
+        ]
+        if not invalidos:
+            break
+        print(
+            f"   '{', '.join(invalidos)}' não é código de idioma que o "
+            "Whisper reconhece."
+        )
+        print("   Use códigos curtos, tipo 'pt' e 'en' — não 'pt-BR' nem 'português'.")
     if novas_linguas != list(config.TRANSCRIPTION_LANGUAGES):
         novos["TRANSCRIPTION_LANGUAGES"] = novas_linguas
 

@@ -143,6 +143,23 @@ class PermissaoNegadaTest(unittest.TestCase):
             actions.handle_done()
 
     @patch("actions.subprocess.run")
+    def test_stderr_reraised_vem_decodificado_como_str(self, mock_run):
+        # Achado por revisão adversarial: a versão anterior reconstruía
+        # CalledProcessError com `exc.stderr` (bytes CRUS, nunca
+        # reatribuído), então quem pegasse essa exceção lá em cima
+        # (main.py, via `f"Audio error: {exc}"`) via só "exit status 1"
+        # — str(CalledProcessError) nunca inclui `.stderr`, com ou sem
+        # reconstrução. O comentário dizia "reanexa o stderr na
+        # mensagem"; na prática não mudava nada observável. A correção
+        # de verdade é entregar `.stderr` já como STR decodificada, pra
+        # quem pegar a exceção poder mostrar o texto real do osascript.
+        mock_run.side_effect = self._falha(b"1:1: execution error: syntax problem")
+        with self.assertRaises(subprocess.CalledProcessError) as ctx:
+            actions.handle_done()
+        self.assertIsInstance(ctx.exception.stderr, str)
+        self.assertIn("syntax problem", ctx.exception.stderr)
+
+    @patch("actions.subprocess.run")
     def test_stderr_ausente_nao_quebra_a_checagem(self, mock_run):
         mock_run.side_effect = subprocess.CalledProcessError(1, ["osascript"])
         with self.assertRaises(subprocess.CalledProcessError):

@@ -20,6 +20,22 @@ name: Publicar o app de iPhone
 # este workflow termina VERDE e imprime o que clicar, em vez de ficar
 # vermelho pra sempre por algo que não é um defeito do código. Depois
 # do clique, ele publica sozinho a cada push.
+#
+# SÓ PUBLICA DE VERDADE A PARTIR DE `main`. As branches `claude/**`
+# continuam listadas abaixo de propósito (rodam os passos de build, o
+# que serve de checagem), mas o passo de DEPLOY falha em ~2s, antes de
+# qualquer coisa rodar — é uma regra de proteção do ambiente de
+# deployment `github-pages` (Settings → Environments → github-pages →
+# Deployment branches and tags), que não é um arquivo versionado e só a
+# dona do repositório consegue ver ou mudar.
+#
+# Isso já custou caro uma vez: o site publicado ficou dias parado
+# enquanto três pushes seguidos numa branch de trabalho "publicavam"
+# sem publicar — incluindo justamente o commit que consertava o envio
+# automático do app de iPhone. O efeito prático que vale lembrar:
+# TESTAR O APP DE IPHONE PELO LINK PUBLICADO SÓ REFLETE O QUE JÁ FOI
+# MERGEADO EM `main`. Antes disso, sirva docs/ localmente
+# (`python3 -m http.server` dentro da pasta).
 
 on:
   push:

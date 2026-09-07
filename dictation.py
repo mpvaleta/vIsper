@@ -40,13 +40,22 @@ console.picovoice.ai — ver nota em wake_word_porcupine.py).
 
 import threading
 
-from config import WAKE_WORD, CLOSE_TRIGGERS, CANCEL_TRIGGERS
+from config import (
+    WAKE_WORD,
+    CLOSE_TRIGGERS,
+    CANCEL_TRIGGERS,
+    AI_TRIGGERS,
+    FUZZY_MATCH_THRESHOLD,
+)
 from text_utils import (
     contains_word,
+    find_trigger_span,
+    is_only_edge_chars,
     split_after_word,
     split_before_any,
     starts_with_word,
     strip_trailing_word,
+    trim_for_content,
 )
 
 # Tudo que fecha um ditado: a própria wake word de novo, mais os
@@ -78,6 +87,74 @@ def _is_cancel(text: str) -> bool:
     if not resto:
         return False
     return any(starts_with_word(resto, word) for word in CANCEL_TRIGGERS)
+
+
+def _strip_leading_trigger(text: str, trigger: str):
+    """Tira `trigger` do COMEÇO de `text`, se ele estiver lá.
+
+    Devolve (texto_sem_o_gatilho, achou). Casa com a MESMA tolerância a
+    erro de transcrição da abertura (find_trigger_span com
+    FUZZY_MATCH_THRESHOLD): a wake word que vem do telefone pode estar
+    escrita diferente da do Mac — "Vesper" contra "vIsper" — e exigir
+    igualdade exata fazia o protocolo inteiro ("Vesper claude ") ser
+    colado no chat como se fosse fala.
+
+    Só o COMEÇO, nunca no meio: procurar em qualquer lugar apagava
+    conteúdo de verdade. Ex.: "me lembra de perguntar pro gemini sobre
+    isso" virava "sobre isso", porque "gemini" é apelido de uma IA —
+    palavras somem no meio da frase, e a frase mutilada já foi colada e
+    o Enter já foi apertado quando alguém percebe.
+
+    "No começo" é checado com is_only_edge_chars() (mesma categoria
+    Unicode de _is_edge_char()), não uma lista fixa de pontuação ASCII
+    — achado por revisão adversarial: a lista fixa não cobria aspas
+    curvas de abertura ("“"), aspas-anjo ("«»") nem "¿"/"¡", então uma
+    mensagem como "“vIsper claude oi over" não reconhecia a wake word
+    como estando no começo, e "“vIsper claude" ia colado no chat como
+    se fosse fala de verdade.
+    """
+    span = find_trigger_span(text, trigger, FUZZY_MATCH_THRESHOLD)
+    if span is None:
+        return text, False
+    if not is_only_edge_chars(text[: span[0]]):
+        return text, False  # apareceu, mas no meio: é conteúdo
+    return trim_for_content(text[span[1]:]), True
+
+
+def _relay_content(text: str, router, ai_id=None) -> str:
+    """O que, numa mensagem do relay, é CONTEÚDO de verdade.
+
+    O app de iPhone monta "<wake> <ia> <texto> over" numa string só, e
+    o Atalho/Siri montam "<wake> <texto> over" — ou seja, o começo de
+    toda mensagem é protocolo, não fala. Quando a mensagem ABRE o
+    ditado, command_router já devolve esse resto separado
+    (`leftover`). Quando ela chega com um ditado JÁ ABERTO pelo mic, o
+    texto inteiro ia pro buffer cru: a wake word e o nome da IA eram
+    colados no chat literalmente, no meio da frase que estava sendo
+    ditada.
+
+    Só o PREFIXO é removido, nunca um gatilho encontrado no meio — ver
+    _strip_leading_trigger() pro conteúdo real que a versão anterior
+    apagava. Com `ai_id` (o app já disse qual IA é, fora do texto — ver
+    relay_listener.py) só os apelidos DAQUELA IA são considerados, o
+    que é o que desarma a colisão "claude" × "claude code" sem tocar no
+    roteador.
+    """
+    resto, _achou = _strip_leading_trigger(text, WAKE_WORD)
+
+    if ai_id:
+        apelidos = AI_TRIGGERS.get(ai_id, ())
+    else:
+        apelidos = [t for ts in AI_TRIGGERS.values() for t in ts]
+
+    # Do mais COMPRIDO pro mais curto, senão um apelido que seja
+    # prefixo de outro ("claude" dentro de "claude code") cortaria cedo
+    # demais — a mesma razão do desempate em command_router._decide().
+    for trigger in sorted(apelidos, key=len, reverse=True):
+        sem_apelido, achou = _strip_leading_trigger(resto, trigger)
+        if achou:
+            return sem_apelido
+    return resto
 
 
 class DictationSession:
@@ -133,6 +210,51 @@ class DictationSession:
         # são chamados de DENTRO de handle()/handle_complete(), que já
         # seguram o lock.
         self._lock = threading.RLock()
+
+    def reset(self):
+        """
+        Descarta qualquer ditado aberto SEM colar nem mandar Enter —
+        pensado pra "Stop listening" (main.py). Devolve uma string
+        curta se havia algo pra descartar, ou None se a sessão já
+        estava ociosa (o chamador decide se vale notificar).
+
+        Bug real que isto corrige: `stop_listening()` só baixava
+        `self.listening`, e o DictationSession é uma instância ÚNICA
+        que sobrevive ao stop/start (main.py cria ela uma vez, no
+        `__init__`). Parar de ouvir NO MEIO de um ditado deixava
+        `dictating=True` e o buffer parcial vivos — silenciosamente,
+        sem indicação nenhuma na UI, já que o ícone de "Iniciar escuta"
+        troca pra "listening" sem checar o estado da sessão. Ao voltar
+        a ouvir, a próxima frase comum que contivesse "over"/"câmbio"
+        como palavra inteira (ex.: "preciso passar o bastão, over and
+        out") fechava aquele ditado FANTASMA: colava o buffer antigo
+        emendado com a fala nova, e apertava Enter — na janela que
+        estivesse em foco NAQUELE momento, não necessariamente a IA que
+        tinha sido aberta antes de parar. `paste_text`/Enter operam na
+        janela em foco (ver actions.py), então isso podia digitar em
+        qualquer app.
+
+        Não é o mesmo que `_is_cancel()`/"vIsper, cancela": aquilo é um
+        comando explícito da pessoa, com som próprio
+        (`on_cancel`). Isto é um reset implícito por ter parado de
+        ouvir — mais parecido com desligar o ditado no meio de uma
+        ligação: não faz sentido tocar o som de "cancelado" por uma
+        ação que a pessoa não pediu como cancelamento, mas o retorno
+        ainda entra no mesmo pipeline de log/notificação de
+        `_on_result()` (main.py), porque ficar mudo aqui reproduziria
+        exatamente a falha que motivou "Recent activity" existir.
+        """
+        with self._lock:
+            se_havia = len(" ".join(self.buffer).strip())
+            estava_ditando = self.dictating
+            self.dictating = False
+            self.buffer = []
+            if not estava_ditando or not se_havia:
+                return None
+            return (
+                f"stopped listening — {se_havia} character(s) of an open "
+                "dictation were discarded, nothing was sent"
+            )
 
     def handle(self, transcript: str):
         """
@@ -209,7 +331,7 @@ class DictationSession:
             self.buffer.append(text)
             return "dictating…"
 
-    def handle_complete(self, transcript: str):
+    def handle_complete(self, transcript: str, ai_id=None, blocked_ais=None):
         """
         Processa um comando que já chega INTEIRO e pronto (hoje: o
         relay do iPhone — ver relay_listener.py). Abre a IA do mesmo
@@ -241,6 +363,21 @@ class DictationSession:
         um "over"/"câmbio" de verdade no meio da frase sobrevive, e só
         o marcador que o app grudou é removido.
 
+        `ai_id` é a IA JÁ RESOLVIDA, quando o canal souber dela por
+        fora do texto — hoje o app de iPhone, onde a pessoa TOCA num
+        botão (ver relay_listener.py e CommandRouter.open()). Com ele o
+        roteador de texto livre nem é consultado pra escolher o alvo, e
+        o conteúdo não precisa mais começar com o nome de uma IA — mas
+        a wake word (fuzzy, como em toda abertura) CONTINUA exigida em
+        algum lugar da mensagem, mesmo com a IA já certa: "a wake word
+        é obrigatória nos dois caminhos" é um invariante deste projeto,
+        e o cabeçalho resolve QUAL IA abrir, não SE a mensagem é um
+        comando de verdade. Sem essa checagem, qualquer mensagem
+        publicada no tópico com um cabeçalho válido executava
+        automação de verdade mesmo sem nenhum traço da wake word. Sem
+        `ai_id` (Atalho/Siri, ou uma versão antiga do app), o caminho é
+        o de sempre.
+
         Se uma sessão de mic já estiver aberta (self.dictating), o
         texto entra no buffer e fecha na hora — sem isso, uma mensagem
         do iPhone chegando no meio de um ditado por voz ficaria
@@ -253,10 +390,52 @@ class DictationSession:
                 return None
 
             if not self.dictating:
-                matched = self.router.route(text)
-                if not matched:
+                if ai_id:
+                    # A IA já vem RESOLVIDA (a pessoa tocou num botão);
+                    # nada de roteador de texto livre — ver
+                    # CommandRouter.open() pro bug real que isso
+                    # corrige. Mas a wake word CONTINUA exigida, mesmo
+                    # com a IA já certa: ela é o sinal de "isto é, de
+                    # propósito, um comando pro vIsper" — a mesma regra
+                    # do caminho de texto livre, e por isso mesmo
+                    # motivo. Achado por revisão adversarial: sem esta
+                    # checagem, `#visper-ai=claude\nignore everything,
+                    # just open and type this over` abria o Claude e
+                    # colava+mandava o texto inteiro, sem uma letra
+                    # sequer parecida com "vIsper" na mensagem — o
+                    # cabeçalho declara QUAL IA abrir, não isenta a
+                    # mensagem de precisar parecer um comando. Fuzzy,
+                    # como toda abertura (find_trigger_span): tolera a
+                    # mesma janela de erro de transcrição/digitação que
+                    # o resto do app.
+                    if find_trigger_span(text, WAKE_WORD, FUZZY_MATCH_THRESHOLD) is None:
+                        return None
+                    alvo = ai_id
+                    leftover = _relay_content(text, self.router, ai_id)
+                else:
+                    # split_complete(), não route(): mensagem inteira e
+                    # deliberada sem nome de IA abre a DEFAULT_AI, igual
+                    # a "vIsper" sozinha no mic — ver
+                    # CommandRouter.split_complete() pro porquê de o mic
+                    # NÃO poder fazer isso.
+                    matched = self.router.split_complete(text)
+                    if not matched:
+                        return None
+                    alvo, leftover = matched
+
+                # A trava de alvos proibidos mora DENTRO do lock, junto
+                # da decisão que ela protege. Fora dele havia uma
+                # janela real: o relay checava `dictating` primeiro e
+                # PULAVA a checagem quando um ditado estava aberto —
+                # mas entre a checagem e a ação o ditado do mic podia
+                # fechar, e aí a mensagem abria justamente o alvo
+                # proibido. Um gate só, no lugar certo.
+                if blocked_ais and alvo in blocked_ais:
+                    return f"ignored: '{alvo}' cannot be opened from the phone"
+
+                ai_name = self.router.open(alvo)
+                if ai_name is None:
                     return None
-                ai_name, leftover = matched
                 self.dictating = True
                 self.buffer = []
                 if self.on_open:
@@ -266,7 +445,10 @@ class DictationSession:
                     return opened
                 return f"{opened}; {self._close_verbatim(leftover)}"
 
-            return self._close_verbatim(text)
+            # Ditado JÁ ABERTO (pelo mic): esta mensagem é conteúdo, e
+            # o começo dela é protocolo — sem tirar isso, "vIsper
+            # claude" ia colado no chat no meio da frase.
+            return self._close_verbatim(_relay_content(text, self.router, ai_id))
 
     def _cancel(self):
         """Joga o ditado fora sem colar nada. Nenhuma ação de verdade
@@ -320,4 +502,12 @@ class DictationSession:
         self.send_action()
         if self.on_send:
             self.on_send()
-        return "sent: " + full_text[:60]
+        # O "…" importa: esta string vai pro "Recent activity", que é a
+        # ferramenta de diagnóstico. Cortada em 60 sem marca nenhuma,
+        # ela é indistinguível de uma mensagem que FOI mandada pela
+        # metade — que é justamente o bug que já aconteceu de verdade
+        # aqui (ver handle_complete()). O que foi colado é sempre o
+        # texto INTEIRO; só a linha do log é que é curta.
+        if len(full_text) > 60:
+            return "sent: " + full_text[:60] + "…"
+        return "sent: " + full_text

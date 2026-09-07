@@ -99,6 +99,34 @@ CANCEL_TRIGGERS = ["cancela", "cancelar", "cancel", "esquece", "forget it"]
 # antigo deixa de valer.
 NTFY_TOPIC = ""
 
+# Os códigos de idioma que o Whisper entende. Só existe pra VALIDAR o
+# que você digita em TRANSCRIPTION_LANGUAGES (abaixo) — não muda o
+# comportamento de nada.
+#
+# Por que validar: o Whisper rejeita um código desconhecido com
+# exceção, e essa exceção acontece lá na frente, DENTRO do laço de
+# transcrição — a escuta morria inteira, minutos depois de você ter
+# salvado, sem nada ligando uma coisa à outra. E o erro é fácil de
+# cometer justamente aqui: "português", "pt-BR" e "eng" são todos
+# palpites razoáveis, e todos quebram. Com a lista, o app recusa na
+# hora e diz qual código não serve.
+#
+# São os códigos do modelo (ISO 639-1, mais "yue" pro cantonês). Se
+# algum dia um modelo novo aceitar um código que não está aqui, é só
+# acrescentar nesta lista.
+SUPPORTED_LANGUAGE_CODES = [
+    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br",
+    "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu",
+    "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw", "he", "hi", "hr",
+    "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km",
+    "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk",
+    "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc",
+    "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl",
+    "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th",
+    "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "yue",
+    "zh",
+]
+
 # Os idiomas que VOCÊ fala. O vIsper nunca vai transcrever em nada
 # fora desta lista.
 #
@@ -170,6 +198,23 @@ FUZZY_MATCH_THRESHOLD = 0.72
 # caso da primeira falhar. Esvazie a lista ([]) se quiser mesmo poder
 # abrir o Terminal pelo iPhone.
 RELAY_BLOCKED_AIS = ["claude_code"]
+
+# Quantos segundos de queda o relay tenta RECUPERAR ao reconectar.
+#
+# O ntfy só entrega, por padrão, o que chega enquanto você está
+# conectado — mensagem publicada durante uma queda some pra sempre.
+# Isso é pior aqui do que parece: o telefone mostra "Sent to your Mac"
+# de qualquer jeito (o POST pro ntfy deu 200), então uma mensagem
+# perdida é indistinguível de "o Mac ignorou o que eu falei".
+# Reconectar pedindo `since=<id da última mensagem vista>` fecha essa
+# janela.
+#
+# Por que um TETO, e não "recupera tudo": o ntfy guarda mensagens por
+# horas, e reexecutar um comando de horas atrás — abrir apps, colar
+# texto, apertar Enter — é surpresa, não recuperação. Cinco minutos
+# cobrem o que este backoff produz na prática (5s→60s) e nada além
+# disso. Zero desliga a recuperação por completo.
+RELAY_BACKLOG_MAX_SECONDS = 300
 
 # Tamanho máximo (caracteres) de uma mensagem vinda do relay. Uma
 # mensagem gigante seria colada inteira no chat da IA; o ntfy aceita

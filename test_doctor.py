@@ -103,3 +103,49 @@ class InputDeviceCheckTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChavesRecusadasTest(unittest.TestCase):
+    """Uma chave RECUSADA pelos VALIDATORS é descartada em silêncio (de
+    propósito — um valor ruim não pode levar o arquivo inteiro junto),
+    e o app segue com o PADRÃO. Sem esta checagem, o doctor.py dizia
+    "tudo certo" enquanto a pessoa achava que tinha configurado.
+
+    O caso real: TRANSCRIPTION_LANGUAGES com "pt-BR"/"eng" — configurou
+    pra falar português, o valor foi recusado, e o app continua "só em
+    inglês", que é justo a queixa que esse ajuste existe pra resolver.
+    """
+
+    def _rodar(self, conteudo, sobrepostas):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = Path(tmp) / "settings.json"
+            caminho.write_text(json.dumps(conteudo), encoding="utf-8")
+            with patch("doctor.settings_path", return_value=caminho), patch.object(
+                config, "OVERRIDDEN_KEYS", sobrepostas
+            ):
+                with patch("doctor._fail") as fail, patch("doctor._ok"), patch(
+                    "doctor._warn"
+                ):
+                    problemas = doctor.check_settings_source()
+            return problemas, fail
+
+    def test_chave_recusada_e_denunciada(self):
+        problemas, fail = self._rodar(
+            {"NTFY_TOPIC": "visper-abc", "TRANSCRIPTION_LANGUAGES": ["pt-BR"]},
+            ["NTFY_TOPIC"],
+        )
+        self.assertEqual(problemas, 1)
+        texto = " ".join(str(a) for a in fail.call_args[0])
+        self.assertIn("TRANSCRIPTION_LANGUAGES", texto)
+
+    def test_tudo_aplicado_nao_reclama(self):
+        problemas, fail = self._rodar(
+            {"NTFY_TOPIC": "visper-abc"},
+            ["NTFY_TOPIC"],
+        )
+        self.assertEqual(problemas, 0)
+        fail.assert_not_called()

@@ -69,11 +69,24 @@ def _run(cmd, **kwargs):
             erro = erro.decode("utf-8", "replace")
         if any(marca in erro.lower() for marca in _NEGADO):
             raise AutomationDenied(erro.strip() or "permission denied") from exc
-        # Reanexa o stderr na mensagem: com capture_output, o texto do
-        # osascript não aparece mais sozinho no terminal, e sem isso a
-        # notificação de erro mostraria só "exit status 1".
+        # Achado por revisão adversarial: reconstruir CalledProcessError
+        # com os MESMOS `exc.returncode`/`exc.cmd`/`exc.output`/
+        # `exc.stderr` de antes não "reanexa o stderr na mensagem" — o
+        # comentário anterior aqui prometia isso, mas str(CalledProcessError)
+        # NUNCA inclui `.stderr`, com ou sem esta reconstrução (é assim
+        # que o próprio Python implementa `__str__` da classe). O que de
+        # fato mudava era só decodificar bytes -> str numa variável
+        # LOCAL (`erro`), sem nunca escrever de volta em `exc.stderr` —
+        # ou seja, quem pegasse esta exceção lá em cima (main.py) via
+        # `f"Audio error: {exc}"` continuava vendo só "exit status 1",
+        # exatamente o que isto dizia estar corrigindo.
+        #
+        # A correção de verdade: devolver `.stderr` já DECODIFICADO (str,
+        # não bytes) pra quem pegar esta exceção — main.py usa isso pra
+        # montar a notificação de erro de verdade, com o texto real do
+        # osascript, não só o número do exit status.
         raise subprocess.CalledProcessError(
-            exc.returncode, exc.cmd, exc.output, exc.stderr
+            exc.returncode, exc.cmd, exc.output, erro
         ) from None
 
 
